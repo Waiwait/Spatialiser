@@ -27,6 +27,9 @@ private:
     //==============================================================================
     // Your private member variables go here...
 
+    juce::TextButton openButton;
+    juce::TextButton playButton;
+    juce::TextButton stopButton;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
