@@ -23,6 +23,9 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
+    //==============================================================================
+    void openAudioFile();
+
 private:
     //==============================================================================
     // Your private member variables go here...
@@ -30,6 +33,11 @@ private:
     juce::TextButton openButton;
     juce::TextButton playButton;
     juce::TextButton stopButton;
+
+    std::unique_ptr<juce::FileChooser> fileChooser;
+    juce::AudioFormatManager formatManager;
+    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
+    juce::AudioTransportSource transportSource;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

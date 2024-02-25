@@ -21,10 +21,9 @@ MainComponent::MainComponent()
     }
 
     // Add transport buttons
-
     addAndMakeVisible(&openButton);
     openButton.setButtonText("Open...");
-    openButton.onClick = [this] { /*openButtonClicked();*/ };
+    openButton.onClick = [this] { openAudioFile(); };
 
     addAndMakeVisible(&playButton);
     playButton.setButtonText("Play");
@@ -37,6 +36,9 @@ MainComponent::MainComponent()
     stopButton.onClick = [this] { /*stopButtonClicked();*/ };
     stopButton.setColour(juce::TextButton::buttonColourId, juce::Colours::red);
     stopButton.setEnabled(false);
+
+    // Register basic audio file formats
+    formatManager.registerBasicFormats();
 }
 
 MainComponent::~MainComponent()
@@ -94,4 +96,39 @@ void MainComponent::resized()
     openButton.setBounds(10, 10, getWidth() - 20, 20);
     playButton.setBounds(10, 40, getWidth() - 20, 20);
     stopButton.setBounds(10, 70, getWidth() - 20, 20);
+}
+
+//==============================================================================
+void MainComponent::openAudioFile()
+{   
+    // Open audio file asynchronously
+    fileChooser = std::make_unique<juce::FileChooser>("Select a Wave file to play...", 
+        juce::File{}, "*.wav");
+    auto chooserFlags = juce::FileBrowserComponent::openMode 
+        | juce::FileBrowserComponent::canSelectFiles;
+
+    fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fileChooser)
+    {
+        auto file = fileChooser.getResult();
+
+        if (file != juce::File{})
+        {
+            auto* fileReader = formatManager.createReaderFor(file);
+
+            if (fileReader != nullptr)
+            {
+                // Create a new reader source from our file reader
+                auto newReaderSource = 
+                    std::make_unique<juce::AudioFormatReaderSource>(fileReader, true);
+
+                // Set input source in our AudioTransportSource to this new reader source
+                transportSource.setSource(newReaderSource.get(), 0, nullptr, fileReader->sampleRate);
+
+                // Set our local reader source to be this newly created reader source
+                readerSource.reset(newReaderSource.release());
+
+                playButton.setEnabled(true);
+            }
+        }
+    });
 }
