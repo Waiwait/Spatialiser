@@ -2,6 +2,7 @@
 
 //==============================================================================
 MainComponent::MainComponent()
+    : playbackState( Stopped )
 {
     // Make sure you set the size of the component after
     // you add any child components.
@@ -27,18 +28,21 @@ MainComponent::MainComponent()
 
     addAndMakeVisible(&playButton);
     playButton.setButtonText("Play");
-    playButton.onClick = [this] { /*playButtonClicked();*/ };
+    playButton.onClick = [this] { startPlayback(); };
     playButton.setColour(juce::TextButton::buttonColourId, juce::Colours::green);
     playButton.setEnabled(false);
 
     addAndMakeVisible(&stopButton);
     stopButton.setButtonText("Stop");
-    stopButton.onClick = [this] { /*stopButtonClicked();*/ };
+    stopButton.onClick = [this] { stopPlayback(); };
     stopButton.setColour(juce::TextButton::buttonColourId, juce::Colours::red);
     stopButton.setEnabled(false);
 
     // Register basic audio file formats
     formatManager.registerBasicFormats();
+
+    // Add change listener for transpor source
+    transportSource.addChangeListener(this);
 }
 
 MainComponent::~MainComponent()
@@ -56,18 +60,20 @@ void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRat
     // You can use this function to initialise any resources you might need,
     // but be careful - it will be called on the audio thread, not the GUI thread.
 
-    // For more details, see the help for AudioProcessor::prepareToPlay()
+    transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
 }
 
 void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill)
 {
-    // Your audio-processing code goes here!
+    if (readerSource.get() == nullptr)
+    {
+        // Right now we are not producing any data, in which case we need to clear the buffer
+        // (to prevent the output of random noise)
+        bufferToFill.clearActiveBufferRegion();
+        return;
+    }
 
-    // For more details, see the help for AudioProcessor::getNextAudioBlock()
-
-    // Right now we are not producing any data, in which case we need to clear the buffer
-    // (to prevent the output of random noise)
-    bufferToFill.clearActiveBufferRegion();
+    transportSource.getNextAudioBlock(bufferToFill);
 }
 
 void MainComponent::releaseResources()
@@ -75,7 +81,7 @@ void MainComponent::releaseResources()
     // This will be called when the audio device stops, or when it is being
     // restarted due to a setting change.
 
-    // For more details, see the help for AudioProcessor::releaseResources()
+    transportSource.releaseResources();
 }
 
 //==============================================================================
@@ -131,4 +137,54 @@ void MainComponent::openAudioFile()
             }
         }
     });
+}
+
+void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
+{
+    if (source == &transportSource)
+    {
+        if (transportSource.isPlaying())
+            changePlaybackState(Playing);
+        else
+            changePlaybackState(Stopped);
+    }
+}
+
+void MainComponent::changePlaybackState(TransportState newState)
+{
+    if (playbackState != newState)
+    {
+        playbackState = newState;
+        switch (playbackState)
+        {
+            case Stopped:
+                stopButton.setEnabled(false);
+                playButton.setEnabled(true);
+                transportSource.setPosition(0.0);
+                break;
+
+            case Starting:
+                playButton.setEnabled(false);
+                transportSource.start();
+                break;
+
+            case Playing:
+                stopButton.setEnabled(true);
+                break;
+
+            case Stopping:
+                transportSource.stop();
+                break;
+        }
+    }
+}
+
+void MainComponent::startPlayback()
+{
+    changePlaybackState(Starting);
+}
+
+void MainComponent::stopPlayback()
+{
+    changePlaybackState(Stopping);
 }

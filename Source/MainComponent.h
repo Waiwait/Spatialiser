@@ -7,7 +7,17 @@
     This component lives inside our window, and this is where you should put all
     your controls and content.
 */
-class MainComponent  : public juce::AudioAppComponent
+
+enum TransportState
+{
+    Stopped,
+    Starting,
+    Playing,
+    Stopping
+};
+
+class MainComponent : public juce::AudioAppComponent
+                    , public juce::ChangeListener
 {
 public:
     //==============================================================================
@@ -25,14 +35,17 @@ public:
 
     //==============================================================================
     void openAudioFile();
+    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
+    void changePlaybackState(TransportState newState);
+    void startPlayback();
+    void stopPlayback();
 
 private:
     //==============================================================================
-    // Your private member variables go here...
-
     juce::TextButton openButton;
     juce::TextButton playButton;
     juce::TextButton stopButton;
+    TransportState playbackState;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::AudioFormatManager formatManager;
