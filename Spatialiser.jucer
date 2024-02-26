@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <JUCERPROJECT id="gyXbG6" name="Spatialiser" projectType="guiapp" useAppConfig="0"
-              addUsingNamespaceToJuceHeader="0" displaySplashScreen="1" jucerFormatVersion="1">
+              addUsingNamespaceToJuceHeader="0" displaySplashScreen="1" jucerFormatVersion="1"
+              headerPath="..\..\Libraries\libsofa\src">
   <MAINGROUP id="b1KPjO" name="Spatialiser">
     <GROUP id="{305A87AF-A866-2317-EFD1-26C19053FE43}" name="Source">
       <FILE id="DF7REW" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>
