@@ -2,22 +2,15 @@
 
 #include <JuceHeader.h>
 
+#include "AudioFileController.h"
+
 //==============================================================================
 /*
     This component lives inside our window, and this is where you should put all
     your controls and content.
 */
 
-enum TransportState
-{
-    Stopped,
-    Starting,
-    Playing,
-    Stopping
-};
-
 class MainComponent : public juce::AudioAppComponent
-                    , public juce::ChangeListener
 {
 public:
     //==============================================================================
@@ -34,23 +27,20 @@ public:
     void resized() override;
 
     //==============================================================================
-    void openAudioFile();
-    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
-    void changePlaybackState(TransportState newState);
-    void startPlayback();
-    void stopPlayback();
+    void setPlayButtonEnabled(bool enable) { playButton.setEnabled(enable); }
+    void setStopButtonEnabled(bool enable) { stopButton.setEnabled(enable); }
 
 private:
     //==============================================================================
+    void openButtonPressed() { audioFileController.openAudioFile(); }
+    void playButtonPressed() { audioFileController.startPlayback(); }
+    void stopButtonPressed() { audioFileController.stopPlayback(); }
+
+    AudioFileController audioFileController;
+
     juce::TextButton openButton;
     juce::TextButton playButton;
     juce::TextButton stopButton;
-    TransportState playbackState;
-
-    std::unique_ptr<juce::FileChooser> fileChooser;
-    juce::AudioFormatManager formatManager;
-    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
-    juce::AudioTransportSource transportSource;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
