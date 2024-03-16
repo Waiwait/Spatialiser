@@ -22,9 +22,13 @@ MainComponent::MainComponent()
     }
 
     // Add transport buttons
-    addAndMakeVisible(&openButton);
-    openButton.setButtonText("Open...");
-    openButton.onClick = [this] { audioFileController.openAudioFile(); };
+    addAndMakeVisible(&openSofaFileButton);
+    openSofaFileButton.setButtonText("Open Sofa File");
+    openSofaFileButton.onClick = [this] { spatialiserController.openSOFAFile(); };
+
+    addAndMakeVisible(&openAudioFileButton);
+    openAudioFileButton.setButtonText("Open Audio File");
+    openAudioFileButton.onClick = [this] { audioFileController.openAudioFile(); };
 
     addAndMakeVisible(&playButton);
     playButton.setButtonText("Play");
@@ -93,7 +97,8 @@ void MainComponent::resized()
     // If you add any child components, this is where you should
     // update their positions.
 
-    openButton.setBounds(10, 10, getWidth() - 20, 20);
-    playButton.setBounds(10, 40, getWidth() - 20, 20);
-    stopButton.setBounds(10, 70, getWidth() - 20, 20);
+    openSofaFileButton.setBounds(10, 10, getWidth() - 20, 20);
+    openAudioFileButton.setBounds(10, 40, getWidth() - 20, 20);
+    playButton.setBounds(10, 70, getWidth() - 20, 20);
+    stopButton.setBounds(10, 100, getWidth() - 20, 20);
 }

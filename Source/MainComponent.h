@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 
 #include "AudioFileController.h"
+#include "SpatialiserController.h"
 
 //==============================================================================
 /*
@@ -37,8 +38,10 @@ private:
     void stopButtonPressed() { audioFileController.stopPlayback(); }
 
     AudioFileController audioFileController;
+    SpatialiserController spatialiserController;
 
-    juce::TextButton openButton;
+    juce::TextButton openSofaFileButton;
+    juce::TextButton openAudioFileButton;
     juce::TextButton playButton;
     juce::TextButton stopButton;
 
