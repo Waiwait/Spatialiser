@@ -1,2 +1,3 @@
-Builds/
-Libraries/libsofa/build
+**/Builds/
+**/JuceLibraryCode/
+**/Libraries/libsofa/build
