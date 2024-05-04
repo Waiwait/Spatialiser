@@ -31,7 +31,7 @@ void AudioFileController::openAudioFile()
 {
     // Open audio file asynchronously
     fileChooser = std::make_unique<juce::FileChooser>("Select a Wave file to play...",
-        juce::File{}, "*.wav");
+        juce::File{}, "*.wav;*.mp3");
     auto chooserFlags = juce::FileBrowserComponent::openMode
         | juce::FileBrowserComponent::canSelectFiles;
 

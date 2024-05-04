@@ -33,7 +33,7 @@
     <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
   </MODULES>
-  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1"/>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_USE_MP3AUDIOFORMAT="1"/>
   <EXPORTFORMATS>
     <VS2022 targetFolder="Builds/VisualStudio2022" externalLibraries="libsofa_debug_x64.lib&#10;libsofa_x64.lib&#10;libcurl_imp_x64.lib&#10;libhdf5_hl_x64.lib&#10;libhdf5_x64.lib&#10;netcdf_x64.lib&#10;zlib_x64.lib">
       <CONFIGURATIONS>
