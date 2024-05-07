@@ -1,6 +1,9 @@
 #include "SpatialiserController.h"
 
 SpatialiserController::SpatialiserController()
+    : numSamplesPerBlock(0)
+    , inputSampleRate(0)
+    , IRNumSamples(0)
 {
 }
 
