@@ -1,7 +1,8 @@
 #include "SpatialiserController.h"
 
 SpatialiserController::SpatialiserController()
-    : numSamplesPerBlock(0)
+    : state(UNPREPARED)
+    , numSamplesPerBlock(0)
     , inputSampleRate(0)
     , IRNumSamples(0)
 {
@@ -77,6 +78,8 @@ void SpatialiserController::openSOFAFile()
 
                 leftConvolveOutput = std::make_unique<float[]>(numSamplesPerBlock + IRNumSamples - 1);
                 rightConvolveOutput = std::make_unique<float[]>(numSamplesPerBlock + IRNumSamples - 1);
+
+                state = PREPARED;
             }
         }
     });
@@ -84,7 +87,7 @@ void SpatialiserController::openSOFAFile()
 
 void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& bufferToFill, float inputAzi, float inputEle)
 {
-    if ( file && file->IsFIRDataType() )
+    if (state == PREPARED)
     {
         // STEP 1 - Find closest IRS
 
@@ -108,10 +111,13 @@ void SpatialiserController::convolve(float* leftSignal, float* rightSignal, floa
 
     // Convolve into local buffer
     int outputNumSamples = numSamplesPerBlock + IRNumSamples - 1;
-    for (int outIdx = 0; outIdx < outputNumSamples; ++outIdx) {
-        for (int IRIdx = 0; IRIdx < IRNumSamples; ++IRIdx) {
+    for (int outIdx = 0; outIdx < outputNumSamples; ++outIdx)
+    {
+        for (int IRIdx = 0; IRIdx < IRNumSamples; ++IRIdx)
+        {
             int inputIdx = outIdx - IRIdx;
-            if (inputIdx >= 0 && inputIdx < numSamplesPerBlock) {
+            if (inputIdx >= 0 && inputIdx < numSamplesPerBlock)
+            {
                 leftConvolveOutput.get()[outIdx] += (leftSignal[inputIdx] * leftIR[IRIdx]);
                 rightConvolveOutput.get()[outIdx] += (rightSignal[inputIdx] * rightIR[IRIdx]);
             }

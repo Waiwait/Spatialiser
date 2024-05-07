@@ -15,6 +15,12 @@ public:
 	void spatialise(const juce::AudioSourceChannelInfo& bufferToFill, float azi, float ele);
 
 private:
+	enum State
+	{
+		UNPREPARED,
+		PREPARED
+	};
+
 	struct IRMapping
 	{
 		double azi;
@@ -24,6 +30,8 @@ private:
 	};
 
 	void convolve(float* leftSignal, float* rightSignal, float* leftIR, float* rightIR);
+
+	State state;
 
 	// Expected audio buffer values
 	int numSamplesPerBlock;
