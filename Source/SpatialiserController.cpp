@@ -1,10 +1,10 @@
 #include "SpatialiserController.h"
 
 SpatialiserController::SpatialiserController()
-    : state(UNPREPARED)
-    , numSamplesPerBlock(0)
-    , inputSampleRate(0)
-    , IRNumSamples(0)
+    : m_state(UNPREPARED)
+    , m_numSamplesPerBlock(0)
+    , m_inputSampleRate(0)
+    , m_IRNumSamples(0)
 {
 }
 
@@ -14,46 +14,46 @@ SpatialiserController::~SpatialiserController()
 
 void SpatialiserController::prepareToPlay(int inputSamplesPerBlock, double sampleRate)
 {
-    numSamplesPerBlock = inputSamplesPerBlock;
-    inputSampleRate = sampleRate;
+    m_numSamplesPerBlock = inputSamplesPerBlock;
+    m_inputSampleRate = sampleRate;
 }
 
 void SpatialiserController::openSOFAFile()
 {
     // Load SOFA file asynchronously
-	fileChooser = std::make_unique<juce::FileChooser>("Select a SOFA HRTF file to load...",
+    m_fileChooser = std::make_unique<juce::FileChooser>("Select a SOFA HRTF file to load...",
 		juce::File{}, "*.SOFA");
 	auto chooserFlags = juce::FileBrowserComponent::openMode
 		| juce::FileBrowserComponent::canSelectFiles;
 
-    fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fileChooser)
+    m_fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fileChooser)
     {
         auto chosenFile = fileChooser.getResult();
         if (chosenFile != juce::File{})
         {
-            file = std::make_unique<sofa::File>(chosenFile.getFullPathName().toStdString());
+            m_file = std::make_unique<sofa::File>(chosenFile.getFullPathName().toStdString());
 
             // Store off azi/ele positions of sources and their IRS
-            if (file->IsFIRDataType())
+            if (m_file->IsFIRDataType())
             {
                 // number of measurements (M in documentation)
-                const size_t numMeasurements = file->GetNumMeasurements();
+                const size_t numMeasurements = m_file->GetNumMeasurements();
                 // number of receivers (typically 2, one for each ear. R in documentation)
-                const size_t numReceivers = file->GetNumReceivers();
+                const size_t numReceivers = m_file->GetNumReceivers();
                 // number of data samples describing one measurement (N in documentation)
-                IRNumSamples = file->GetNumDataSamples();
+                m_IRNumSamples = m_file->GetNumDataSamples();
 
                 // Get position of sources. Positions stored in following order: Azi, Ele, Distance.
                 std::vector<double> sourcePositions;
-                file->GetValues(sourcePositions, "SourcePosition");
+                m_file->GetValues(sourcePositions, "SourcePosition");
 
                 // Store off raw IRs as floats
-                std::unique_ptr<double[]> dRawIRs(new double[numMeasurements * numReceivers * IRNumSamples]);
-                file->GetValues(dRawIRs.get(), numMeasurements, numReceivers, IRNumSamples, "Data.IR");
-                rawIRs = std::make_unique<float[]>(numMeasurements * numReceivers * IRNumSamples);
-                for (size_t idx = 0; idx < numMeasurements * numReceivers * IRNumSamples; ++idx)
+                std::unique_ptr<double[]> dRawIRs(new double[numMeasurements * numReceivers * m_IRNumSamples]);
+                m_file->GetValues(dRawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples, "Data.IR");
+                m_rawIRs = std::make_unique<float[]>(numMeasurements * numReceivers * m_IRNumSamples);
+                for (size_t idx = 0; idx < numMeasurements * numReceivers * m_IRNumSamples; ++idx)
                 {
-                    rawIRs[idx] = static_cast<float>(dRawIRs[idx]);
+                    m_rawIRs[idx] = static_cast<float>(dRawIRs[idx]);
                 }
 
                 // Map IRs with ele and azi
@@ -64,22 +64,22 @@ void SpatialiserController::openSOFAFile()
                     double ele = sourcePositions[(measurementIdx * 3) + 1];
 
                     // Get left and right IRs
-                    float* leftIR = &rawIRs.get()[measurementIdx * IRNumSamples * numReceivers];
-                    float* rightIR = &rawIRs.get()[(measurementIdx * IRNumSamples * numReceivers) + IRNumSamples];
+                    float* leftIR = &m_rawIRs.get()[measurementIdx * m_IRNumSamples * numReceivers];
+                    float* rightIR = &m_rawIRs.get()[(measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
                     
                     // Create an IR mapping and add to our list
                     IRMapping irMapping;
-                    irMapping.azi = azi;
-                    irMapping.ele = ele;
-                    irMapping.leftIR = leftIR;
-                    irMapping.rightIR = rightIR;
-                    IRMappingCollection.push_back(irMapping);
+                    irMapping.m_azi = azi;
+                    irMapping.m_ele = ele;
+                    irMapping.m_leftIR = leftIR;
+                    irMapping.m_rightIR = rightIR;
+                    m_IRMappingCollection.push_back(irMapping);
                 }
 
-                leftConvolveOutput = std::make_unique<float[]>(numSamplesPerBlock + IRNumSamples - 1);
-                rightConvolveOutput = std::make_unique<float[]>(numSamplesPerBlock + IRNumSamples - 1);
+                m_leftConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
+                m_rightConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
 
-                state = PREPARED;
+                m_state = PREPARED;
             }
         }
     });
@@ -87,7 +87,7 @@ void SpatialiserController::openSOFAFile()
 
 void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& bufferToFill, float inputAzi, float inputEle)
 {
-    if (state == PREPARED)
+    if (m_state == PREPARED)
     {
         // STEP 1 - Find closest IRS
 
@@ -95,7 +95,7 @@ void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& buffe
 
         // STEP 3 CONVOLVE
         convolve(bufferToFill.buffer->getWritePointer(0), bufferToFill.buffer->getWritePointer(1), 
-            IRMappingCollection[0].leftIR, IRMappingCollection[0].rightIR);
+            m_IRMappingCollection[0].m_leftIR, m_IRMappingCollection[0].m_rightIR);
 
         // STEP 4: ITD
     }
@@ -104,27 +104,27 @@ void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& buffe
 void SpatialiserController::convolve(float* leftSignal, float* rightSignal, float* leftIR, float* rightIR)
 {
     // Erase first segment (size of input buffer) of our local convolver output buffer and shift data forward
-    std::memcpy(&leftConvolveOutput.get()[0], &leftConvolveOutput.get()[numSamplesPerBlock], (IRNumSamples - 1) * sizeof(float));
-    std::memset(&leftConvolveOutput.get()[IRNumSamples - 1], 0, numSamplesPerBlock * sizeof(float));
-    std::memcpy(&rightConvolveOutput.get()[0], &rightConvolveOutput.get()[numSamplesPerBlock], (IRNumSamples - 1) * sizeof(float));
-    std::memset(&rightConvolveOutput.get()[IRNumSamples - 1], 0, numSamplesPerBlock * sizeof(float));
+    std::memcpy(&m_leftConvolveOutput.get()[0], &m_leftConvolveOutput.get()[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
+    std::memset(&m_leftConvolveOutput.get()[m_IRNumSamples - 1], 0, m_numSamplesPerBlock * sizeof(float));
+    std::memcpy(&m_rightConvolveOutput.get()[0], &m_rightConvolveOutput.get()[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
+    std::memset(&m_rightConvolveOutput.get()[m_IRNumSamples - 1], 0, m_numSamplesPerBlock * sizeof(float));
 
     // Convolve into local buffer
-    int outputNumSamples = numSamplesPerBlock + IRNumSamples - 1;
+    int outputNumSamples = m_numSamplesPerBlock + m_IRNumSamples - 1;
     for (int outIdx = 0; outIdx < outputNumSamples; ++outIdx)
     {
-        for (int IRIdx = 0; IRIdx < IRNumSamples; ++IRIdx)
+        for (int IRIdx = 0; IRIdx < m_IRNumSamples; ++IRIdx)
         {
             int inputIdx = outIdx - IRIdx;
-            if (inputIdx >= 0 && inputIdx < numSamplesPerBlock)
+            if (inputIdx >= 0 && inputIdx < m_numSamplesPerBlock)
             {
-                leftConvolveOutput.get()[outIdx] += (leftSignal[inputIdx] * leftIR[IRIdx]);
-                rightConvolveOutput.get()[outIdx] += (rightSignal[inputIdx] * rightIR[IRIdx]);
+                m_leftConvolveOutput.get()[outIdx] += (leftSignal[inputIdx] * leftIR[IRIdx]);
+                m_rightConvolveOutput.get()[outIdx] += (rightSignal[inputIdx] * rightIR[IRIdx]);
             }
         }
     }
     
     // Copy a buffers worth of data from local buffer into output buffer
-    std::memcpy(leftSignal, &leftConvolveOutput.get()[0], numSamplesPerBlock * sizeof(float));
-    std::memcpy(rightSignal, &rightConvolveOutput.get()[0], numSamplesPerBlock * sizeof(float));
+    std::memcpy(leftSignal, &m_leftConvolveOutput.get()[0], m_numSamplesPerBlock * sizeof(float));
+    std::memcpy(rightSignal, &m_rightConvolveOutput.get()[0], m_numSamplesPerBlock * sizeof(float));
 }

@@ -28,22 +28,22 @@ public:
     void resized() override;
 
     //==============================================================================
-    void setPlayButtonEnabled(bool enable) { playButton.setEnabled(enable); }
-    void setStopButtonEnabled(bool enable) { stopButton.setEnabled(enable); }
+    void setPlayButtonEnabled(bool enable) { m_playButton.setEnabled(enable); }
+    void setStopButtonEnabled(bool enable) { m_stopButton.setEnabled(enable); }
 
 private:
     //==============================================================================
-    void openButtonPressed() { audioFileController.openAudioFile(); }
-    void playButtonPressed() { audioFileController.startPlayback(); }
-    void stopButtonPressed() { audioFileController.stopPlayback(); }
+    void openButtonPressed() { m_audioFileController.openAudioFile(); }
+    void playButtonPressed() { m_audioFileController.startPlayback(); }
+    void stopButtonPressed() { m_audioFileController.stopPlayback(); }
 
-    AudioFileController audioFileController;
-    SpatialiserController spatialiserController;
+    AudioFileController m_audioFileController;
+    SpatialiserController m_spatialiserController;
 
-    juce::TextButton openSofaFileButton;
-    juce::TextButton openAudioFileButton;
-    juce::TextButton playButton;
-    juce::TextButton stopButton;
+    juce::TextButton m_openSofaFileButton;
+    juce::TextButton m_openAudioFileButton;
+    juce::TextButton m_playButton;
+    juce::TextButton m_stopButton;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

@@ -2,7 +2,7 @@
 
 //==============================================================================
 MainComponent::MainComponent()
-    : audioFileController( this )
+    : m_audioFileController( this )
 {
     // Make sure you set the size of the component after
     // you add any child components.
@@ -22,25 +22,25 @@ MainComponent::MainComponent()
     }
 
     // Add transport buttons
-    addAndMakeVisible(&openSofaFileButton);
-    openSofaFileButton.setButtonText("Open Sofa File");
-    openSofaFileButton.onClick = [this] { spatialiserController.openSOFAFile(); };
+    addAndMakeVisible(&m_openSofaFileButton);
+    m_openSofaFileButton.setButtonText("Open Sofa File");
+    m_openSofaFileButton.onClick = [this] { m_spatialiserController.openSOFAFile(); };
 
-    addAndMakeVisible(&openAudioFileButton);
-    openAudioFileButton.setButtonText("Open Audio File");
-    openAudioFileButton.onClick = [this] { audioFileController.openAudioFile(); };
+    addAndMakeVisible(&m_openAudioFileButton);
+    m_openAudioFileButton.setButtonText("Open Audio File");
+    m_openAudioFileButton.onClick = [this] { m_audioFileController.openAudioFile(); };
 
-    addAndMakeVisible(&playButton);
-    playButton.setButtonText("Play");
-    playButton.onClick = [this] { audioFileController.startPlayback(); };
-    playButton.setColour(juce::TextButton::buttonColourId, juce::Colours::green);
-    playButton.setEnabled(false);
+    addAndMakeVisible(&m_playButton);
+    m_playButton.setButtonText("Play");
+    m_playButton.onClick = [this] { m_audioFileController.startPlayback(); };
+    m_playButton.setColour(juce::TextButton::buttonColourId, juce::Colours::green);
+    m_playButton.setEnabled(false);
 
-    addAndMakeVisible(&stopButton);
-    stopButton.setButtonText("Stop");
-    stopButton.onClick = [this] { audioFileController.stopPlayback(); };
-    stopButton.setColour(juce::TextButton::buttonColourId, juce::Colours::red);
-    stopButton.setEnabled(false);
+    addAndMakeVisible(&m_stopButton);
+    m_stopButton.setButtonText("Stop");
+    m_stopButton.onClick = [this] { m_audioFileController.stopPlayback(); };
+    m_stopButton.setColour(juce::TextButton::buttonColourId, juce::Colours::red);
+    m_stopButton.setEnabled(false);
 }
 
 MainComponent::~MainComponent()
@@ -58,13 +58,13 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     // You can use this function to initialise any resources you might need,
     // but be careful - it will be called on the audio thread, not the GUI thread.
 
-    audioFileController.prepareToPlay(samplesPerBlockExpected, sampleRate);
-    spatialiserController.prepareToPlay(samplesPerBlockExpected, sampleRate);
+    m_audioFileController.prepareToPlay(samplesPerBlockExpected, sampleRate);
+    m_spatialiserController.prepareToPlay(samplesPerBlockExpected, sampleRate);
 }
 
 void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill)
 {
-    if (!audioFileController.isProducingData())
+    if (!m_audioFileController.isProducingData())
     {
         // Right now we are not producing any data, in which case we need to clear the buffer
         // (to prevent the output of random noise)
@@ -72,7 +72,7 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& buffe
         return;
     }
 
-    audioFileController.getNextAudioBlock(bufferToFill);
+    m_audioFileController.getNextAudioBlock(bufferToFill);
 }
 
 void MainComponent::releaseResources()
@@ -80,7 +80,7 @@ void MainComponent::releaseResources()
     // This will be called when the audio device stops, or when it is being
     // restarted due to a setting change.
 
-    audioFileController.releaseResources();
+    m_audioFileController.releaseResources();
 }
 
 //==============================================================================
@@ -98,8 +98,8 @@ void MainComponent::resized()
     // If you add any child components, this is where you should
     // update their positions.
 
-    openSofaFileButton.setBounds(10, 10, getWidth() - 20, 20);
-    openAudioFileButton.setBounds(10, 40, getWidth() - 20, 20);
-    playButton.setBounds(10, 70, getWidth() - 20, 20);
-    stopButton.setBounds(10, 100, getWidth() - 20, 20);
+    m_openSofaFileButton.setBounds(10, 10, getWidth() - 20, 20);
+    m_openAudioFileButton.setBounds(10, 40, getWidth() - 20, 20);
+    m_playButton.setBounds(10, 70, getWidth() - 20, 20);
+    m_stopButton.setBounds(10, 100, getWidth() - 20, 20);
 }

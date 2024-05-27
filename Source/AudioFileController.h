@@ -26,19 +26,19 @@ public:
     void startPlayback(){ changePlaybackState(Starting); }
     void stopPlayback(){ changePlaybackState(Stopping); }
 
-    bool isProducingData() { return readerSource.get() != nullptr; }
+    bool isProducingData() { return m_readerSource.get() != nullptr; }
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill);
 
 private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
     void changePlaybackState(TransportState newState);
 
-    MainComponent* mainComponent;
+    MainComponent* m_mainComponent;
 
-    TransportState playbackState;
+    TransportState m_playbackState;
 
-    std::unique_ptr<juce::FileChooser> fileChooser;
-    juce::AudioFormatManager formatManager;
-    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
-    juce::AudioTransportSource transportSource;
+    std::unique_ptr<juce::FileChooser> m_fileChooser;
+    juce::AudioFormatManager m_formatManager;
+    std::unique_ptr<juce::AudioFormatReaderSource> m_readerSource;
+    juce::AudioTransportSource m_transportSource;
 };

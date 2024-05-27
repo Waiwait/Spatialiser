@@ -23,30 +23,30 @@ private:
 
 	struct IRMapping
 	{
-		double azi;
-		double ele;
-		float* leftIR;
-		float* rightIR;
+		double m_azi;
+		double m_ele;
+		float* m_leftIR;
+		float* m_rightIR;
 	};
 
 	void convolve(float* leftSignal, float* rightSignal, float* leftIR, float* rightIR);
 
-	State state;
+	State m_state;
 
 	// Expected audio buffer values
-	int numSamplesPerBlock;
-	double inputSampleRate;
+	int m_numSamplesPerBlock;
+	double m_inputSampleRate;
 
 	// Sofa file
-	std::unique_ptr<juce::FileChooser> fileChooser;
-	std::unique_ptr<sofa::File> file;
+	std::unique_ptr<juce::FileChooser> m_fileChooser;
+	std::unique_ptr<sofa::File> m_file;
 
 	// IRs
-	std::unique_ptr<float[]> rawIRs;
-	size_t IRNumSamples; // number of samples contained in one IR measurement
-	std::vector< IRMapping> IRMappingCollection;
+	std::unique_ptr<float[]> m_rawIRs;
+	size_t m_IRNumSamples; // number of samples contained in one IR measurement
+	std::vector< IRMapping> m_IRMappingCollection;
 
 	// Convolver output history
-	std::unique_ptr<float[]> leftConvolveOutput;
-	std::unique_ptr<float[]> rightConvolveOutput;
+	std::unique_ptr<float[]> m_leftConvolveOutput;
+	std::unique_ptr<float[]> m_rightConvolveOutput;
 };
