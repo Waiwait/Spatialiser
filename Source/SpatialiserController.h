@@ -12,6 +12,8 @@ public:
 	void prepareToPlay(int samplesPerBlockExpected, double sampleRate);
 
 	void openSOFAFile();
+	void loadHRTFData(sofa::File& file);
+
 	void spatialise(const juce::AudioSourceChannelInfo& bufferToFill, float azi, float ele);
 
 private:
@@ -25,11 +27,11 @@ private:
 	{
 		double m_azi;
 		double m_ele;
-		float* m_leftIR;
-		float* m_rightIR;
+		std::shared_ptr<float[]> m_leftIR;
+		std::shared_ptr<float[]> m_rightIR;
 	};
 
-	void convolve(float* leftSignal, float* rightSignal, float* leftIR, float* rightIR);
+	void convolve(float* leftSignal, float* rightSignal, std::shared_ptr<float[]> leftIR, std::shared_ptr<float[]> rightIR);
 
 	State m_state;
 
@@ -41,8 +43,7 @@ private:
 	std::unique_ptr<juce::FileChooser> m_fileChooser;
 
 	// IRs
-	std::unique_ptr<float[]> m_rawIRs;
-	size_t m_IRNumSamples; // number of samples contained in one IR measurement
+	int m_IRNumSamples; // number of samples contained in one IR measurement
 	std::vector< IRMapping> m_IRMappingCollection;
 
 	// Convolver output history

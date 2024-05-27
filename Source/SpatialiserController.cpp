@@ -1,5 +1,26 @@
 #include "SpatialiserController.h"
 
+const int RESAMPLED_HRTF_ANGLE_INTERVAL = 5;
+
+struct DistMapping
+{
+    int m_measurementIdx;
+    double m_distance;
+    double m_aziRad;
+    double m_eleRad;
+};
+
+bool compareDist(DistMapping a, DistMapping b)
+{
+    return (a.m_distance < b.m_distance);
+}
+
+bool checkIfOnSamePlane(double azi1, double ele1, double azi2, double ele2, double azi3, double ele3)
+{
+    return (juce::approximatelyEqual(azi1, azi2) && juce::approximatelyEqual(azi2, azi3))
+        || (juce::approximatelyEqual(ele1, ele2) && juce::approximatelyEqual(ele2, ele3));
+}
+
 SpatialiserController::SpatialiserController()
     : m_state(UNPREPARED)
     , m_numSamplesPerBlock(0)
@@ -36,53 +57,149 @@ void SpatialiserController::openSOFAFile()
             // Store off azi/ele positions of sources and their IRS
             if (file->IsFIRDataType())
             {
-                // number of measurements (M in documentation)
-                const size_t numMeasurements = file->GetNumMeasurements();
-                // number of receivers (typically 2, one for each ear. R in documentation)
-                const size_t numReceivers = file->GetNumReceivers();
-                // number of data samples describing one measurement (N in documentation)
-                m_IRNumSamples = file->GetNumDataSamples();
-
-                // Get position of sources. Positions stored in following order: Azi, Ele, Distance.
-                std::vector<double> sourcePositions;
-                file->GetValues(sourcePositions, "SourcePosition");
-
-                // Store off raw IRs as floats
-                std::unique_ptr<double[]> dRawIRs(new double[numMeasurements * numReceivers * m_IRNumSamples]);
-                file->GetValues(dRawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples, "Data.IR");
-                m_rawIRs = std::make_unique<float[]>(numMeasurements * numReceivers * m_IRNumSamples);
-                for (size_t idx = 0; idx < numMeasurements * numReceivers * m_IRNumSamples; ++idx)
-                {
-                    m_rawIRs[idx] = static_cast<float>(dRawIRs[idx]);
-                }
-
-                // Map IRs with ele and azi
-                for (size_t measurementIdx = 0; measurementIdx < numMeasurements; ++measurementIdx)
-                {
-                    // Ele and azi for current measurement
-                    double azi = sourcePositions[measurementIdx * 3];
-                    double ele = sourcePositions[(measurementIdx * 3) + 1];
-
-                    // Get left and right IRs
-                    float* leftIR = &m_rawIRs[measurementIdx * m_IRNumSamples * numReceivers];
-                    float* rightIR = &m_rawIRs[(measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                    
-                    // Create an IR mapping and add to our list
-                    IRMapping irMapping;
-                    irMapping.m_azi = azi;
-                    irMapping.m_ele = ele;
-                    irMapping.m_leftIR = leftIR;
-                    irMapping.m_rightIR = rightIR;
-                    m_IRMappingCollection.push_back(irMapping);
-                }
-
-                m_leftConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
-                m_rightConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
-
-                m_state = PREPARED;
+                // TODO: Do this off-thread and report when done
+                loadHRTFData(*file.get());
             }
         }
     });
+}
+
+void SpatialiserController::loadHRTFData(sofa::File& file)
+{
+    // number of measurements (M in documentation)
+    const size_t numMeasurements = file.GetNumMeasurements();
+    // number of receivers (typically 2, one for each ear. R in documentation)
+    const size_t numReceivers = file.GetNumReceivers();
+    // number of data samples describing one measurement (N in documentation)
+    m_IRNumSamples = file.GetNumDataSamples();
+
+    // Get position of sources. Positions stored in following order: Azi, Ele, Distance.
+    std::vector<double> sourcePositions;
+    file.GetValues(sourcePositions, "SourcePosition");
+
+    // Store off distance of measurement (assume that distance is the same for all measurements)
+    double radius = sourcePositions[2];
+    double circumference = 2.0 * juce::float_Pi * radius;
+
+    // Store raw IRs as floats
+    std::unique_ptr<double[]> dRawIRs(new double[numMeasurements * numReceivers * m_IRNumSamples]);
+    std::unique_ptr<float[]> fRawIRs(new float[numMeasurements * numReceivers * m_IRNumSamples]);
+    file.GetValues(dRawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples, "Data.IR");
+    for (int idx = 0; idx < numMeasurements * numReceivers * m_IRNumSamples; ++idx)
+    {
+        fRawIRs[idx] = static_cast<float>(dRawIRs[idx]);
+    }
+
+    std::vector<DistMapping> distMappingList;
+
+    // Interpolate HRTFs in 5 deg intervals
+    for (int tarAzi = 0; tarAzi < 360; tarAzi += RESAMPLED_HRTF_ANGLE_INTERVAL)
+    {
+        for (int tarEle = 0; tarEle < 360; tarEle += RESAMPLED_HRTF_ANGLE_INTERVAL)
+        {
+            float tarAziRad = static_cast<float>(tarAzi) * (juce::float_Pi / 180.0f);
+            float tarEleRad = static_cast<float>(tarEle) * (juce::float_Pi / 180.0f);
+
+            // Get distances between current target azi/ele and all measurements in sofa file
+            std::vector<DistMapping> distMappingList;
+            for (int measurementIdx = 0; measurementIdx < numMeasurements; ++measurementIdx)
+            {
+                // Ele and azi for current measurement in SOFA file
+                float azi = static_cast<float>(sourcePositions[measurementIdx * 3]);
+                float ele = static_cast<float>(sourcePositions[(measurementIdx * 3) + 1]);
+
+                float aziDiffRad = (static_cast<float>(tarAzi) - azi) * (juce::float_Pi / 180.0f);
+                float eleDiffRad = (static_cast<float>(tarEle) - ele) * (juce::float_Pi / 180.0f);
+                float aziRad = azi * (juce::float_Pi / 180.0f);
+                float eleRad = ele * (juce::float_Pi / 180.0f);
+
+                // Haversine fomula
+                double dist = 2 * radius * std::asin(std::sqrt((1 - std::cos(aziDiffRad) + std::cos(aziRad) *
+                    std::cosf(tarAziRad) * (1 - std::cos(eleDiffRad))) / 2.0));
+
+                while (dist > circumference / 2.0)
+                {
+                    dist -= circumference / 2.0;
+                }
+
+                DistMapping distMapping{ measurementIdx, dist, aziRad, eleRad };
+                distMappingList.push_back(distMapping);
+            }
+
+            // Sort mapping by distances
+            std::sort(distMappingList.begin(), distMappingList.end(), compareDist);
+
+            // Get target HRTF from interpolation
+            std::shared_ptr<float[]> interpolatedLeftIR(new float[m_IRNumSamples]);
+            std::shared_ptr<float[]> interpolatedRightIR(new float[m_IRNumSamples]);
+
+            if (juce::approximatelyEqual(distMappingList[0].m_distance, (double)0.0))
+            {
+                // We have a source HRTF at this position, so just use this instead of interpolating
+                float* leftIR = &fRawIRs[distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers];
+                float* rightIR = &fRawIRs[(distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
+
+                std::memcpy(interpolatedLeftIR.get(), leftIR, m_IRNumSamples * sizeof(float));
+                std::memcpy(interpolatedRightIR.get(), rightIR, m_IRNumSamples * sizeof(float));
+            }
+            else
+            {
+                // Barycentric interpolate the IR between 3 closest measurements
+                float* leftIR1 = &fRawIRs[distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers];
+                float* rightIR1 = &fRawIRs[(distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
+                float aziRad1 = distMappingList[0].m_aziRad;
+                float eleRad1 = distMappingList[0].m_eleRad;
+
+                float* leftIR2 = &fRawIRs[distMappingList[1].m_measurementIdx * m_IRNumSamples * numReceivers];
+                float* rightIR2 = &fRawIRs[(distMappingList[1].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
+                float aziRad2 = distMappingList[1].m_aziRad;
+                float eleRad2 = distMappingList[1].m_eleRad;
+
+                int IR3Idx = 2;
+                while (checkIfOnSamePlane(distMappingList[0].m_aziRad, distMappingList[0].m_eleRad,
+                    distMappingList[1].m_aziRad, distMappingList[1].m_eleRad,
+                    distMappingList[IR3Idx].m_aziRad, distMappingList[IR3Idx].m_eleRad))
+                {
+                    // The three closest HRTFs to the target coordinate are all on the same plane. So find 
+                    // the next HRTF that isn't for the third one
+                    ++IR3Idx;
+                    if (IR3Idx >= numMeasurements)
+                    {
+                        // TODO: Report error and stop
+                    }
+                }
+
+                float* leftIR3 = &fRawIRs[distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers];
+                float* rightIR3 = &fRawIRs[(distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
+                float aziRad3 = distMappingList[IR3Idx].m_aziRad;
+                float eleRad3 = distMappingList[IR3Idx].m_eleRad;
+
+                float a = ((aziRad2 - aziRad3) * (tarEleRad - eleRad3) + (eleRad3 - eleRad2) * (tarAziRad - aziRad3))
+                    / ((aziRad2 - aziRad3) * (eleRad1 - eleRad3) + (eleRad3 - eleRad2) * (aziRad1 - aziRad3));
+                float b = ((aziRad3 - aziRad1) * (tarEleRad - eleRad3) + (eleRad1 - eleRad3) * (tarAziRad - aziRad3))
+                    / ((aziRad2 - aziRad3) * (eleRad1 - eleRad3) + (eleRad3 - eleRad2) * (aziRad1 - aziRad3));
+                float c = 1 - a - b;
+
+                for (int i = 0; i < m_IRNumSamples; ++i)
+                {
+                    interpolatedLeftIR[i] = a * leftIR1[i] + b * leftIR2[i] + c * leftIR3[i];
+                    interpolatedRightIR[i] = a * rightIR1[i] + b * rightIR2[i] + c * rightIR3[i];
+                }
+            }
+
+            IRMapping irMapping;
+            irMapping.m_azi = tarAzi;
+            irMapping.m_ele = tarEle;
+            irMapping.m_leftIR = interpolatedLeftIR;
+            irMapping.m_rightIR = interpolatedRightIR;
+            m_IRMappingCollection.push_back(irMapping);
+        }
+    }
+
+    m_leftConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
+    m_rightConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
+
+    m_state = PREPARED;
 }
 
 void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& bufferToFill, float inputAzi, float inputEle)
@@ -101,7 +218,7 @@ void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& buffe
     }
 }
 
-void SpatialiserController::convolve(float* leftSignal, float* rightSignal, float* leftIR, float* rightIR)
+void SpatialiserController::convolve(float* leftSignal, float* rightSignal, std::shared_ptr<float[]> leftIR, std::shared_ptr<float[]> rightIR)
 {
     // Erase first segment (size of input buffer) of our local convolver output buffer and shift data forward
     std::memcpy(&m_leftConvolveOutput[0], &m_leftConvolveOutput[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
