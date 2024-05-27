@@ -31,25 +31,25 @@ void SpatialiserController::openSOFAFile()
         auto chosenFile = fileChooser.getResult();
         if (chosenFile != juce::File{})
         {
-            m_file = std::make_unique<sofa::File>(chosenFile.getFullPathName().toStdString());
+            std::unique_ptr<sofa::File> file = std::make_unique<sofa::File>(chosenFile.getFullPathName().toStdString());
 
             // Store off azi/ele positions of sources and their IRS
-            if (m_file->IsFIRDataType())
+            if (file->IsFIRDataType())
             {
                 // number of measurements (M in documentation)
-                const size_t numMeasurements = m_file->GetNumMeasurements();
+                const size_t numMeasurements = file->GetNumMeasurements();
                 // number of receivers (typically 2, one for each ear. R in documentation)
-                const size_t numReceivers = m_file->GetNumReceivers();
+                const size_t numReceivers = file->GetNumReceivers();
                 // number of data samples describing one measurement (N in documentation)
-                m_IRNumSamples = m_file->GetNumDataSamples();
+                m_IRNumSamples = file->GetNumDataSamples();
 
                 // Get position of sources. Positions stored in following order: Azi, Ele, Distance.
                 std::vector<double> sourcePositions;
-                m_file->GetValues(sourcePositions, "SourcePosition");
+                file->GetValues(sourcePositions, "SourcePosition");
 
                 // Store off raw IRs as floats
                 std::unique_ptr<double[]> dRawIRs(new double[numMeasurements * numReceivers * m_IRNumSamples]);
-                m_file->GetValues(dRawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples, "Data.IR");
+                file->GetValues(dRawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples, "Data.IR");
                 m_rawIRs = std::make_unique<float[]>(numMeasurements * numReceivers * m_IRNumSamples);
                 for (size_t idx = 0; idx < numMeasurements * numReceivers * m_IRNumSamples; ++idx)
                 {

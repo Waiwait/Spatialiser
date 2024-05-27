@@ -39,7 +39,6 @@ private:
 
 	// Sofa file
 	std::unique_ptr<juce::FileChooser> m_fileChooser;
-	std::unique_ptr<sofa::File> m_file;
 
 	// IRs
 	std::unique_ptr<float[]> m_rawIRs;
