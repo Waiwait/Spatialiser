@@ -12,7 +12,7 @@ public:
 	void prepareToPlay(int samplesPerBlockExpected, double sampleRate);
 
 	void openSOFAFile();
-	void loadHRTFData(sofa::File& file);
+	void loadHRTFData(sofa::GeneralFIR& file);
 
 	void spatialise(const juce::AudioSourceChannelInfo& bufferToFill, float azi, float ele);
 

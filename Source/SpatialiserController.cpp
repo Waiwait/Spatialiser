@@ -57,14 +57,15 @@ void SpatialiserController::openSOFAFile()
             // Store off azi/ele positions of sources and their IRS
             if (file->IsFIRDataType())
             {
+                std::unique_ptr<sofa::GeneralFIR> firFile = std::make_unique<sofa::GeneralFIR>(chosenFile.getFullPathName().toStdString());
                 // TODO: Do this off-thread and report when done
-                loadHRTFData(*file.get());
+                loadHRTFData(*firFile.get());
             }
         }
     });
 }
 
-void SpatialiserController::loadHRTFData(sofa::File& file)
+void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
 {
     // number of measurements (M in documentation)
     const size_t numMeasurements = file.GetNumMeasurements();
@@ -75,7 +76,7 @@ void SpatialiserController::loadHRTFData(sofa::File& file)
 
     // Get position of sources. Positions stored in following order: Azi, Ele, Distance.
     std::vector<double> sourcePositions;
-    file.GetValues(sourcePositions, "SourcePosition");
+    file.GetSourcePosition(sourcePositions);
 
     // Store off distance of measurement (assume that distance is the same for all measurements)
     double radius = sourcePositions[2];
@@ -84,7 +85,7 @@ void SpatialiserController::loadHRTFData(sofa::File& file)
     // Store raw IRs as floats
     std::unique_ptr<double[]> dRawIRs(new double[numMeasurements * numReceivers * m_IRNumSamples]);
     std::unique_ptr<float[]> fRawIRs(new float[numMeasurements * numReceivers * m_IRNumSamples]);
-    file.GetValues(dRawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples, "Data.IR");
+    file.GetDataIR(dRawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples);
     for (int idx = 0; idx < numMeasurements * numReceivers * m_IRNumSamples; ++idx)
     {
         fRawIRs[idx] = static_cast<float>(dRawIRs[idx]);
