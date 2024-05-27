@@ -64,8 +64,8 @@ void SpatialiserController::openSOFAFile()
                     double ele = sourcePositions[(measurementIdx * 3) + 1];
 
                     // Get left and right IRs
-                    float* leftIR = &m_rawIRs.get()[measurementIdx * m_IRNumSamples * numReceivers];
-                    float* rightIR = &m_rawIRs.get()[(measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
+                    float* leftIR = &m_rawIRs[measurementIdx * m_IRNumSamples * numReceivers];
+                    float* rightIR = &m_rawIRs[(measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
                     
                     // Create an IR mapping and add to our list
                     IRMapping irMapping;
@@ -104,10 +104,10 @@ void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& buffe
 void SpatialiserController::convolve(float* leftSignal, float* rightSignal, float* leftIR, float* rightIR)
 {
     // Erase first segment (size of input buffer) of our local convolver output buffer and shift data forward
-    std::memcpy(&m_leftConvolveOutput.get()[0], &m_leftConvolveOutput.get()[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
-    std::memset(&m_leftConvolveOutput.get()[m_IRNumSamples - 1], 0, m_numSamplesPerBlock * sizeof(float));
-    std::memcpy(&m_rightConvolveOutput.get()[0], &m_rightConvolveOutput.get()[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
-    std::memset(&m_rightConvolveOutput.get()[m_IRNumSamples - 1], 0, m_numSamplesPerBlock * sizeof(float));
+    std::memcpy(&m_leftConvolveOutput[0], &m_leftConvolveOutput[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
+    std::memset(&m_leftConvolveOutput[m_IRNumSamples - 1], 0, m_numSamplesPerBlock * sizeof(float));
+    std::memcpy(&m_rightConvolveOutput[0], &m_rightConvolveOutput[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
+    std::memset(&m_rightConvolveOutput[m_IRNumSamples - 1], 0, m_numSamplesPerBlock * sizeof(float));
 
     // Convolve into local buffer
     int outputNumSamples = m_numSamplesPerBlock + m_IRNumSamples - 1;
@@ -118,13 +118,13 @@ void SpatialiserController::convolve(float* leftSignal, float* rightSignal, floa
             int inputIdx = outIdx - IRIdx;
             if (inputIdx >= 0 && inputIdx < m_numSamplesPerBlock)
             {
-                m_leftConvolveOutput.get()[outIdx] += (leftSignal[inputIdx] * leftIR[IRIdx]);
-                m_rightConvolveOutput.get()[outIdx] += (rightSignal[inputIdx] * rightIR[IRIdx]);
+                m_leftConvolveOutput[outIdx] += (leftSignal[inputIdx] * leftIR[IRIdx]);
+                m_rightConvolveOutput[outIdx] += (rightSignal[inputIdx] * rightIR[IRIdx]);
             }
         }
     }
     
     // Copy a buffers worth of data from local buffer into output buffer
-    std::memcpy(leftSignal, &m_leftConvolveOutput.get()[0], m_numSamplesPerBlock * sizeof(float));
-    std::memcpy(rightSignal, &m_rightConvolveOutput.get()[0], m_numSamplesPerBlock * sizeof(float));
+    std::memcpy(leftSignal, &m_leftConvolveOutput[0], m_numSamplesPerBlock * sizeof(float));
+    std::memcpy(rightSignal, &m_rightConvolveOutput[0], m_numSamplesPerBlock * sizeof(float));
 }
