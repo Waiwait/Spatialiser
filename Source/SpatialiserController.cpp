@@ -10,7 +10,7 @@ struct DistMapping
     double m_eleRad;
 };
 
-bool compareDist(DistMapping a, DistMapping b)
+bool compareDist(DistMapping& a, DistMapping& b)
 {
     return (a.m_distance < b.m_distance);
 }
@@ -68,9 +68,9 @@ void SpatialiserController::openSOFAFile()
 void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
 {
     // number of measurements (M in documentation)
-    const size_t numMeasurements = file.GetNumMeasurements();
+    const long numMeasurements = file.GetNumMeasurements();
     // number of receivers (typically 2, one for each ear. R in documentation)
-    const size_t numReceivers = file.GetNumReceivers();
+    const long numReceivers = file.GetNumReceivers();
     // number of data samples describing one measurement (N in documentation)
     m_IRNumSamples = file.GetNumDataSamples();
 
@@ -80,9 +80,9 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
 
     // Store off distance of measurement (assume that distance is the same for all measurements)
     double radius = sourcePositions[2];
-    double circumference = 2.0 * juce::float_Pi * radius;
+    double circumference = 2.0 * juce::double_Pi * radius;
 
-    // Store raw IRs as floats
+    // Store raw IRs as floats (since JUCE requires in floats)
     std::unique_ptr<double[]> dRawIRs(new double[numMeasurements * numReceivers * m_IRNumSamples]);
     std::unique_ptr<float[]> fRawIRs(new float[numMeasurements * numReceivers * m_IRNumSamples]);
     file.GetDataIR(dRawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples);
@@ -94,29 +94,29 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
     std::vector<DistMapping> distMappingList;
 
     // Interpolate HRTFs in 5 deg intervals
-    for (int tarAzi = 0; tarAzi < 360; tarAzi += RESAMPLED_HRTF_ANGLE_INTERVAL)
+    for (int tarAzi = -180; tarAzi < 180; tarAzi += RESAMPLED_HRTF_ANGLE_INTERVAL)
     {
-        for (int tarEle = 0; tarEle < 360; tarEle += RESAMPLED_HRTF_ANGLE_INTERVAL)
+        for (int tarEle = -180; tarEle < 180; tarEle += RESAMPLED_HRTF_ANGLE_INTERVAL)
         {
-            float tarAziRad = static_cast<float>(tarAzi) * (juce::float_Pi / 180.0f);
-            float tarEleRad = static_cast<float>(tarEle) * (juce::float_Pi / 180.0f);
+            double tarAziRad = static_cast<double>(tarAzi) * juce::double_Pi / 180.0;
+            double tarEleRad = static_cast<double>(tarEle) * juce::double_Pi / 180.0;
 
             // Get distances between current target azi/ele and all measurements in sofa file
             std::vector<DistMapping> distMappingList;
             for (int measurementIdx = 0; measurementIdx < numMeasurements; ++measurementIdx)
             {
                 // Ele and azi for current measurement in SOFA file
-                float azi = static_cast<float>(sourcePositions[measurementIdx * 3]);
-                float ele = static_cast<float>(sourcePositions[(measurementIdx * 3) + 1]);
+                double azi = sourcePositions[measurementIdx * 3];
+                double ele = sourcePositions[(measurementIdx * 3) + 1];
 
-                float aziDiffRad = (static_cast<float>(tarAzi) - azi) * (juce::float_Pi / 180.0f);
-                float eleDiffRad = (static_cast<float>(tarEle) - ele) * (juce::float_Pi / 180.0f);
-                float aziRad = azi * (juce::float_Pi / 180.0f);
-                float eleRad = ele * (juce::float_Pi / 180.0f);
+                double aziDiffRad = (static_cast<double>(tarAzi) - azi) * juce::double_Pi / 180.0;
+                double eleDiffRad = (static_cast<double>(tarEle) - ele) * juce::double_Pi / 180.0;
+                double aziRad = azi * juce::double_Pi / 180.0;
+                double eleRad = ele * juce::double_Pi / 180.0;
 
                 // Haversine fomula
-                double dist = 2 * radius * std::asin(std::sqrt((1 - std::cos(aziDiffRad) + std::cos(aziRad) *
-                    std::cosf(tarAziRad) * (1 - std::cos(eleDiffRad))) / 2.0));
+                double dist = 2.0 * radius * std::asin(std::sqrt((1 - std::cos(aziDiffRad) + std::cos(aziRad) *
+                    std::cosf(tarAziRad) * (1.0 - std::cos(eleDiffRad))) / 2.0));
 
                 while (dist > circumference / 2.0)
                 {
@@ -148,13 +148,13 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
                 // Barycentric interpolate the IR between 3 closest measurements
                 float* leftIR1 = &fRawIRs[distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers];
                 float* rightIR1 = &fRawIRs[(distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                float aziRad1 = distMappingList[0].m_aziRad;
-                float eleRad1 = distMappingList[0].m_eleRad;
+                double aziRad1 = distMappingList[0].m_aziRad;
+                double eleRad1 = distMappingList[0].m_eleRad;
 
                 float* leftIR2 = &fRawIRs[distMappingList[1].m_measurementIdx * m_IRNumSamples * numReceivers];
                 float* rightIR2 = &fRawIRs[(distMappingList[1].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                float aziRad2 = distMappingList[1].m_aziRad;
-                float eleRad2 = distMappingList[1].m_eleRad;
+                double aziRad2 = distMappingList[1].m_aziRad;
+                double eleRad2 = distMappingList[1].m_eleRad;
 
                 int IR3Idx = 2;
                 while (checkIfOnSamePlane(distMappingList[0].m_aziRad, distMappingList[0].m_eleRad,
@@ -172,14 +172,14 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
 
                 float* leftIR3 = &fRawIRs[distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers];
                 float* rightIR3 = &fRawIRs[(distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                float aziRad3 = distMappingList[IR3Idx].m_aziRad;
-                float eleRad3 = distMappingList[IR3Idx].m_eleRad;
+                double aziRad3 = distMappingList[IR3Idx].m_aziRad;
+                double eleRad3 = distMappingList[IR3Idx].m_eleRad;
 
-                float a = ((aziRad2 - aziRad3) * (tarEleRad - eleRad3) + (eleRad3 - eleRad2) * (tarAziRad - aziRad3))
+                double a = ((aziRad2 - aziRad3) * (tarEleRad - eleRad3) + (eleRad3 - eleRad2) * (tarAziRad - aziRad3))
                     / ((aziRad2 - aziRad3) * (eleRad1 - eleRad3) + (eleRad3 - eleRad2) * (aziRad1 - aziRad3));
-                float b = ((aziRad3 - aziRad1) * (tarEleRad - eleRad3) + (eleRad1 - eleRad3) * (tarAziRad - aziRad3))
+                double b = ((aziRad3 - aziRad1) * (tarEleRad - eleRad3) + (eleRad1 - eleRad3) * (tarAziRad - aziRad3))
                     / ((aziRad2 - aziRad3) * (eleRad1 - eleRad3) + (eleRad3 - eleRad2) * (aziRad1 - aziRad3));
-                float c = 1 - a - b;
+                double c = 1.0 - a - b;
 
                 for (int i = 0; i < m_IRNumSamples; ++i)
                 {
