@@ -1,6 +1,7 @@
 #include "SpatialiserController.h"
 
 const int RESAMPLED_HRTF_ANGLE_INTERVAL = 5;
+const float HRTF_REL_ONSET_THRESHOLD = 0.31f;
 
 struct DistMapping
 {
@@ -48,7 +49,7 @@ bool getBarycentricCoeffs(double tarAzi, double tarEle, Triangle& t, double& a, 
     double denom = (angDiff(t.m_ele2, t.m_ele3) * angDiff(t.m_azi1, t.m_azi3)
         + angDiff(t.m_azi3, t.m_azi2) * angDiff(t.m_ele1, t.m_ele3));
 
-    a = (angDiff(t.m_ele2,t.m_ele3) * angDiff(tarAzi, t.m_azi3) + angDiff(t.m_azi3, t.m_azi2) * angDiff(tarEle, t.m_ele3))
+    a = (angDiff(t.m_ele2, t.m_ele3) * angDiff(tarAzi, t.m_azi3) + angDiff(t.m_azi3, t.m_azi2) * angDiff(tarEle, t.m_ele3))
         / denom;
     b = (angDiff(t.m_ele3, t.m_ele1) * (tarAzi, t.m_azi3) + angDiff(t.m_azi1, t.m_azi3) * angDiff(tarEle, t.m_ele3))
         / denom;
@@ -130,6 +131,46 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
         fRawIRs[idx] = static_cast<float>(dRawIRs[idx]);
     }
 
+    // Calculate ITDs for raw IRs
+    std::unique_ptr<int[]> rawITDs(new int[numMeasurements * numReceivers]);
+    for (int measurementIdx = 0; measurementIdx < numMeasurements; ++measurementIdx)
+    {
+        for (int receiverIdx = 0; receiverIdx < 2; ++receiverIdx)
+        {
+            float* IR = &fRawIRs[(measurementIdx * 2 + receiverIdx) * m_IRNumSamples];
+
+            // Find peak val
+            float peakVal = 0;
+            for (int idx = 0; idx < m_IRNumSamples; ++idx)
+            {
+                if (IR[idx] > peakVal)
+                {
+                    peakVal = IR[idx];
+                }
+            }
+
+            // Calculate IR onset threshold and store this
+            int* ITD = &rawITDs[measurementIdx * 2 + receiverIdx];
+            float onsetThreshold = HRTF_REL_ONSET_THRESHOLD * peakVal;
+            for (int sampleIdx = 0; sampleIdx < m_IRNumSamples; ++sampleIdx)
+            {
+                if (IR[sampleIdx] > onsetThreshold)
+                {
+                    *ITD = sampleIdx;
+                    break;
+                }
+                if (sampleIdx == m_IRNumSamples - 1)
+                {
+                    // ASSERT HERE
+                }
+            }
+
+            // Remove ITDs for raw IRs
+            std::memcpy(IR, &IR[*ITD], (m_IRNumSamples - *ITD) * sizeof(float));
+            std::memset(&IR[m_IRNumSamples - *ITD], 0.0f, *ITD * sizeof(float));
+        }
+    }
+
     std::vector<DistMapping> distMappingList;
 
     // Interpolate HRTFs in 5 deg intervals
@@ -168,9 +209,11 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
             // Sort mapping by distances
             std::sort(distMappingList.begin(), distMappingList.end(), compareDist);
 
-            // Get target HRTF from interpolation
+            // Get target HRTF and ITD from interpolation
             std::shared_ptr<float[]> interpolatedLeftIR(new float[m_IRNumSamples]);
             std::shared_ptr<float[]> interpolatedRightIR(new float[m_IRNumSamples]);
+            int interpolatedLeftITD = 0.0f;
+            int interpolatedRightITD = 0.0f;
 
             if (juce::approximatelyEqual(distMappingList[0].m_distance, 0.0))
             {
@@ -180,11 +223,14 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
 
                 std::memcpy(interpolatedLeftIR.get(), leftIR, m_IRNumSamples * sizeof(float));
                 std::memcpy(interpolatedRightIR.get(), rightIR, m_IRNumSamples * sizeof(float));
+
+                interpolatedLeftITD = rawITDs[distMappingList[0].m_measurementIdx * numReceivers];
+                interpolatedRightITD = rawITDs[distMappingList[0].m_measurementIdx * numReceivers + 1];
             }
             else
             {
                 // Barycentric interpolate the IR between 3 closest measurements
-                
+
                 // Barycentric coefficients
                 double a = 0.0f;
                 double b = 0.0f;
@@ -193,6 +239,7 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
                 int IR1Idx = 0;
                 int IR2Idx = 1;
                 int IR3Idx = 2;
+
                 bool valid = false;
                 while (!valid)
                 {
@@ -241,20 +288,31 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
                 float* rightIR2 = &fRawIRs[(distMappingList[IR2Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
                 float* leftIR3 = &fRawIRs[distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers];
                 float* rightIR3 = &fRawIRs[(distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
+                int leftITD1 = rawITDs[distMappingList[IR1Idx].m_measurementIdx * numReceivers];
+                int rightITD1 = rawITDs[distMappingList[IR1Idx].m_measurementIdx * numReceivers + 1];
+                int leftITD2 = rawITDs[distMappingList[IR2Idx].m_measurementIdx * numReceivers];
+                int rightITD2 = rawITDs[distMappingList[IR2Idx].m_measurementIdx * numReceivers + 1];
+                int leftITD3 = rawITDs[distMappingList[IR3Idx].m_measurementIdx * numReceivers];
+                int rightITD3 = rawITDs[distMappingList[IR3Idx].m_measurementIdx * numReceivers + 1];
 
                 for (int i = 0; i < m_IRNumSamples; ++i)
                 {
                     interpolatedLeftIR[i] = a * leftIR1[i] + b * leftIR2[i] + c * leftIR3[i];
                     interpolatedRightIR[i] = a * rightIR1[i] + b * rightIR2[i] + c * rightIR3[i];
                 }
+                interpolatedLeftITD = std::round(a * static_cast<float>(leftITD1) + b * static_cast<float>(leftITD2) + 
+                    c * static_cast<float>(leftITD3));
+                interpolatedRightITD = std::round(a * static_cast<float>(rightITD1) + b * static_cast<float>(rightITD2) + 
+                    c * static_cast<float>(rightITD3));
             }
 
-            // Store IR
             IRMapping irMapping;
             irMapping.m_azi = tarAzi;
             irMapping.m_ele = tarEle;
             irMapping.m_leftIR = interpolatedLeftIR;
             irMapping.m_rightIR = interpolatedRightIR;
+            irMapping.m_leftITD = interpolatedLeftITD;
+            irMapping.m_rightITD = interpolatedRightITD;
             m_IRMappingCollection.push_back(irMapping);
         }
     }
