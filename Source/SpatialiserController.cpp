@@ -6,8 +6,18 @@ struct DistMapping
 {
     int m_measurementIdx;
     double m_distance;
-    double m_aziRad;
-    double m_eleRad;
+    double m_azi;
+    double m_ele;
+};
+
+struct Triangle
+{
+    double m_azi1;
+    double m_ele1;
+    double m_azi2;
+    double m_ele2;
+    double m_azi3;
+    double m_ele3;
 };
 
 bool compareDist(DistMapping& a, DistMapping& b)
@@ -15,10 +25,39 @@ bool compareDist(DistMapping& a, DistMapping& b)
     return (a.m_distance < b.m_distance);
 }
 
-bool checkIfOnSamePlane(double azi1, double ele1, double azi2, double ele2, double azi3, double ele3)
+double angDiff(double aDeg, double bDeg)
 {
-    return (juce::approximatelyEqual(azi1, azi2) && juce::approximatelyEqual(azi2, azi3))
-        || (juce::approximatelyEqual(ele1, ele2) && juce::approximatelyEqual(ele2, ele3));
+    // Calculate difference between angles in degrees, whilst making sure to wrap around
+    double result = aDeg - bDeg;
+    if (result > 180.0)
+    {
+        result -= 360.0;
+    }
+    else if (result < -180.0)
+    {
+        result += 360.0;
+    }
+    return result;
+}
+
+bool getBarycentricCoeffs(double tarAzi, double tarEle, Triangle& t, double& a, double& b, double& c)
+{
+    // I think this is actually slightly inaccurate. We're using barycentric interpolation as if this were a 2d plane
+    // rather than on a sphere. However, this is what is used in 3DTI and it's effect is likely very insignificant.
+
+    double denom = (angDiff(t.m_ele2, t.m_ele3) * angDiff(t.m_azi1, t.m_azi3)
+        + angDiff(t.m_azi3, t.m_azi2) * angDiff(t.m_ele1, t.m_ele3));
+
+    a = (angDiff(t.m_ele2,t.m_ele3) * angDiff(tarAzi, t.m_azi3) + angDiff(t.m_azi3, t.m_azi2) * angDiff(tarEle, t.m_ele3))
+        / denom;
+    b = (angDiff(t.m_ele3, t.m_ele1) * (tarAzi, t.m_azi3) + angDiff(t.m_azi1, t.m_azi3) * angDiff(tarEle, t.m_ele3))
+        / denom;
+    c = 1.0 - a - b;
+
+    // We want the coefficient values to be between 0 and 1. If they are not, this is likely because of either -
+    // 1. All the points are on the same plane (i.e. all on the same azi or ele plane)
+    // 2. The triangle does not enclose the target point
+    return(a >= 0.0 && a <= 1.0 && b >= 0.0 && b <= 1.0 && c >= 0.0 && c <= 1.0);
 }
 
 SpatialiserController::SpatialiserController()
@@ -94,9 +133,9 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
     std::vector<DistMapping> distMappingList;
 
     // Interpolate HRTFs in 5 deg intervals
-    for (int tarAzi = -180; tarAzi < 180; tarAzi += RESAMPLED_HRTF_ANGLE_INTERVAL)
+    for (int tarAzi = 0; tarAzi < 360; tarAzi += RESAMPLED_HRTF_ANGLE_INTERVAL)
     {
-        for (int tarEle = -180; tarEle < 180; tarEle += RESAMPLED_HRTF_ANGLE_INTERVAL)
+        for (int tarEle = 0; tarEle < 360; tarEle += RESAMPLED_HRTF_ANGLE_INTERVAL)
         {
             double tarAziRad = static_cast<double>(tarAzi) * juce::double_Pi / 180.0;
             double tarEleRad = static_cast<double>(tarEle) * juce::double_Pi / 180.0;
@@ -115,15 +154,14 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
                 double eleRad = ele * juce::double_Pi / 180.0;
 
                 // Haversine fomula
-                double dist = 2.0 * radius * std::asin(std::sqrt((1 - std::cos(aziDiffRad) + std::cos(aziRad) *
+                double dist = 2.0 * radius * std::asin(std::sqrt((1.0 - std::cos(aziDiffRad) + std::cos(aziRad) *
                     std::cosf(tarAziRad) * (1.0 - std::cos(eleDiffRad))) / 2.0));
-
                 while (dist > circumference / 2.0)
                 {
                     dist -= circumference / 2.0;
                 }
 
-                DistMapping distMapping{ measurementIdx, dist, aziRad, eleRad };
+                DistMapping distMapping{ measurementIdx, dist, azi, ele };
                 distMappingList.push_back(distMapping);
             }
 
@@ -134,7 +172,7 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
             std::shared_ptr<float[]> interpolatedLeftIR(new float[m_IRNumSamples]);
             std::shared_ptr<float[]> interpolatedRightIR(new float[m_IRNumSamples]);
 
-            if (juce::approximatelyEqual(distMappingList[0].m_distance, (double)0.0))
+            if (juce::approximatelyEqual(distMappingList[0].m_distance, 0.0))
             {
                 // We have a source HRTF at this position, so just use this instead of interpolating
                 float* leftIR = &fRawIRs[distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers];
@@ -146,40 +184,63 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
             else
             {
                 // Barycentric interpolate the IR between 3 closest measurements
-                float* leftIR1 = &fRawIRs[distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers];
-                float* rightIR1 = &fRawIRs[(distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                double aziRad1 = distMappingList[0].m_aziRad;
-                double eleRad1 = distMappingList[0].m_eleRad;
+                
+                // Barycentric coefficients
+                double a = 0.0f;
+                double b = 0.0f;
+                double c = 0.0f;
 
-                float* leftIR2 = &fRawIRs[distMappingList[1].m_measurementIdx * m_IRNumSamples * numReceivers];
-                float* rightIR2 = &fRawIRs[(distMappingList[1].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                double aziRad2 = distMappingList[1].m_aziRad;
-                double eleRad2 = distMappingList[1].m_eleRad;
-
+                int IR1Idx = 0;
+                int IR2Idx = 1;
                 int IR3Idx = 2;
-                while (checkIfOnSamePlane(distMappingList[0].m_aziRad, distMappingList[0].m_eleRad,
-                    distMappingList[1].m_aziRad, distMappingList[1].m_eleRad,
-                    distMappingList[IR3Idx].m_aziRad, distMappingList[IR3Idx].m_eleRad))
+                bool valid = false;
+                while (!valid)
                 {
-                    // The three closest HRTFs to the target coordinate are all on the same plane. So find 
-                    // the next HRTF that isn't for the third one
-                    ++IR3Idx;
-                    if (IR3Idx >= numMeasurements)
+                    double azi1 = distMappingList[IR1Idx].m_azi;
+                    double ele1 = distMappingList[IR1Idx].m_ele;
+                    double azi2 = distMappingList[IR2Idx].m_azi;
+                    double ele2 = distMappingList[IR2Idx].m_ele;
+                    double azi3 = distMappingList[IR3Idx].m_azi;
+                    double ele3 = distMappingList[IR3Idx].m_ele;
+
+                    // Make sure three closest HRTFs to the target coordinate are all on the same plane or the target
+                    // isn't enclosed in the triangle for the three HRTFs. So find the next HRTF that isn't for the 
+                    // third one
+                    Triangle triangle{ azi1, ele1, azi2, ele2, azi3, ele3 };
+                    if (!getBarycentricCoeffs(tarAzi, tarEle, triangle, a, b, c))
                     {
-                        // TODO: Report error and stop
+                        ++IR3Idx;
+                        if (IR3Idx >= numMeasurements)
+                        {
+                            ++IR2Idx;
+                            IR3Idx = IR2Idx + 1;
+                        }
+                        if (IR2Idx >= numMeasurements - 1)
+                        {
+                            ++IR1Idx;
+                            IR2Idx = IR1Idx + 1;
+                            IR3Idx = IR2Idx + 1;
+                        }
+                        if (IR3Idx >= numMeasurements)
+                        {
+                            // We failed to find points that enclose the target. This should never happen and is likely
+                            // a code error
+                            int g = 0;
+                        }
+                    }
+                    else
+                    {
+                        valid = true;
                     }
                 }
 
+                // Interpolate
+                float* leftIR1 = &fRawIRs[distMappingList[IR1Idx].m_measurementIdx * m_IRNumSamples * numReceivers];
+                float* rightIR1 = &fRawIRs[(distMappingList[IR1Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
+                float* leftIR2 = &fRawIRs[distMappingList[IR2Idx].m_measurementIdx * m_IRNumSamples * numReceivers];
+                float* rightIR2 = &fRawIRs[(distMappingList[IR2Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
                 float* leftIR3 = &fRawIRs[distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers];
                 float* rightIR3 = &fRawIRs[(distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                double aziRad3 = distMappingList[IR3Idx].m_aziRad;
-                double eleRad3 = distMappingList[IR3Idx].m_eleRad;
-
-                double a = ((aziRad2 - aziRad3) * (tarEleRad - eleRad3) + (eleRad3 - eleRad2) * (tarAziRad - aziRad3))
-                    / ((aziRad2 - aziRad3) * (eleRad1 - eleRad3) + (eleRad3 - eleRad2) * (aziRad1 - aziRad3));
-                double b = ((aziRad3 - aziRad1) * (tarEleRad - eleRad3) + (eleRad1 - eleRad3) * (tarAziRad - aziRad3))
-                    / ((aziRad2 - aziRad3) * (eleRad1 - eleRad3) + (eleRad3 - eleRad2) * (aziRad1 - aziRad3));
-                double c = 1.0 - a - b;
 
                 for (int i = 0; i < m_IRNumSamples; ++i)
                 {
@@ -188,6 +249,7 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
                 }
             }
 
+            // Store IR
             IRMapping irMapping;
             irMapping.m_azi = tarAzi;
             irMapping.m_ele = tarEle;
