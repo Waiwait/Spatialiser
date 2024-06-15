@@ -14,6 +14,7 @@ public:
 	void openSOFAFile();
 	void loadHRTFData(sofa::GeneralFIR& file);
 
+	void setPosition(double azi, double ele);
 	void spatialise(const juce::AudioSourceChannelInfo& bufferToFill, float azi, float ele);
 
 private:
@@ -34,6 +35,9 @@ private:
 	};
 
 	void convolve(float* leftSignal, float* rightSignal, std::shared_ptr<float[]> leftIR, std::shared_ptr<float[]> rightIR);
+
+	float m_azi;
+	float m_ele;
 
 	State m_state;
 

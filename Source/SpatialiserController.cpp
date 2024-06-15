@@ -339,6 +339,12 @@ void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& buffe
     }
 }
 
+void SpatialiserController::setPosition(double azi, double ele)
+{
+    m_azi = azi;
+    m_ele = ele;
+}
+
 void SpatialiserController::convolve(float* leftSignal, float* rightSignal, std::shared_ptr<float[]> leftIR, std::shared_ptr<float[]> rightIR)
 {
     // Erase first segment (size of input buffer) of our local convolver output buffer and shift data forward

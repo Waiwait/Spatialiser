@@ -3,10 +3,12 @@
 //==============================================================================
 MainComponent::MainComponent()
     : m_audioFileController( this )
+    , m_aziDial(juce::Slider::Rotary, juce::Slider::TextBoxBelow)
+    , m_eleSlider(juce::Slider::LinearVertical, juce::Slider::TextBoxBelow)
 {
     // Make sure you set the size of the component after
     // you add any child components.
-    setSize (800, 600);
+    setSize (400, 600);
 
     // Some platforms require permissions to open input channels so request that here
     if (juce::RuntimePermissions::isRequired (juce::RuntimePermissions::recordAudio)
@@ -41,6 +43,31 @@ MainComponent::MainComponent()
     m_stopButton.onClick = [this] { m_audioFileController.stopPlayback(); };
     m_stopButton.setColour(juce::TextButton::buttonColourId, juce::Colours::red);
     m_stopButton.setEnabled(false);
+
+    addAndMakeVisible(&m_aziDial);
+    m_aziDial.setRotaryParameters(0.0f, 2 * juce::float_Pi, false);
+    m_aziDial.setColour(juce::Slider::ColourIds::rotarySliderFillColourId, 
+        m_aziDial.findColour(juce::Slider::ColourIds::rotarySliderOutlineColourId));
+    m_aziDial.setRange(0, 360.0, 0.1);
+    m_aziDial.setNumDecimalPlacesToDisplay(1);
+    m_aziDial.setTextValueSuffix(" deg");
+    m_aziDial.onValueChange = [this] {onSliderChange();};
+
+    m_aziLabel.setJustificationType(juce::Justification::centredBottom);
+    m_aziLabel.attachToComponent(&m_aziDial, false);
+    m_aziLabel.setText("Azimuth Angle", juce::dontSendNotification);
+
+    addAndMakeVisible(&m_eleSlider);
+    m_eleSlider.setColour(juce::Slider::ColourIds::trackColourId,
+        m_eleSlider.findColour(juce::Slider::ColourIds::backgroundColourId));
+    m_eleSlider.setRange(-90.0, 90.0, 0.1);
+    m_eleSlider.setNumDecimalPlacesToDisplay(1);
+    m_eleSlider.setTextValueSuffix(" deg");
+    m_eleSlider.onValueChange = [this] {onSliderChange(); };
+
+    m_eleLabel.setJustificationType(juce::Justification::centredBottom);
+    m_eleLabel.attachToComponent(&m_eleSlider, false);
+    m_eleLabel.setText("Elevation Angle", juce::dontSendNotification);
 }
 
 MainComponent::~MainComponent()
@@ -102,4 +129,12 @@ void MainComponent::resized()
     m_openAudioFileButton.setBounds(10, 40, getWidth() - 20, 20);
     m_playButton.setBounds(10, 70, getWidth() - 20, 20);
     m_stopButton.setBounds(10, 100, getWidth() - 20, 20);
+
+    m_aziDial.setBounds(10, 155, getWidth()/2, getWidth()/2);
+    m_eleSlider.setBounds(getWidth() / 2, 155, getWidth() / 2, getWidth() / 2);
+}
+
+void MainComponent::onSliderChange()
+{
+    m_spatialiserController.setPosition(m_aziDial.getValue(), m_eleSlider.getValue());
 }

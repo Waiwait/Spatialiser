@@ -37,6 +37,8 @@ private:
     void playButtonPressed() { m_audioFileController.startPlayback(); }
     void stopButtonPressed() { m_audioFileController.stopPlayback(); }
 
+    void onSliderChange();
+
     AudioFileController m_audioFileController;
     SpatialiserController m_spatialiserController;
 
@@ -44,6 +46,11 @@ private:
     juce::TextButton m_openAudioFileButton;
     juce::TextButton m_playButton;
     juce::TextButton m_stopButton;
+
+    juce::Label m_aziLabel;
+    juce::Slider m_aziDial;
+    juce::Label m_eleLabel;
+    juce::Slider m_eleSlider;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
