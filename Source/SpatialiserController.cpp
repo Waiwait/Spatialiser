@@ -41,6 +41,28 @@ double angDiff(double aDeg, double bDeg)
     return result;
 }
 
+double calcSphericaldist(double aAzi, double aEle, double bAzi, double bEle, double radius)
+{
+    double circumference = 2.0 * juce::double_Pi * radius;
+
+    double aAziRad = aAzi * juce::double_Pi / 180.0;
+    double aEleRad = aEle * juce::double_Pi / 180.0;
+    double bAziRad = bAzi * juce::double_Pi / 180.0;
+    double bEleRad = bEle * juce::double_Pi / 180.0;
+    double aziDiffRad = aAziRad - bAziRad;
+    double eleDiffRad = aEleRad - bEleRad;
+
+    // Haversine formula
+    double dist = 2.0 * radius * std::asin(std::sqrt((1.0 - std::cos(aziDiffRad) + std::cos(bAziRad) *
+        std::cosf(aAziRad) * (1.0 - std::cos(eleDiffRad))) / 2.0));
+    while (dist > circumference / 2.0)
+    {
+        dist -= circumference / 2.0;
+    }
+
+    return dist;
+}
+
 bool getBarycentricCoeffs(double tarAzi, double tarEle, Triangle& t, double& a, double& b, double& c)
 {
     // I think this is actually slightly inaccurate. We're using barycentric interpolation as if this were a 2d plane
@@ -119,8 +141,7 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
     file.GetSourcePosition(sourcePositions);
 
     // Store off distance of measurement (assume that distance is the same for all measurements)
-    double radius = sourcePositions[2];
-    double circumference = 2.0 * juce::double_Pi * radius;
+    m_radius = sourcePositions[2];
 
     // Store raw IRs as floats (since JUCE requires in floats)
     std::unique_ptr<double[]> dRawIRs(new double[numMeasurements * numReceivers * m_IRNumSamples]);
@@ -171,16 +192,11 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
         }
     }
 
-    std::vector<DistMapping> distMappingList;
-
     // Interpolate HRTFs in 5 deg intervals
     for (int tarAzi = 0; tarAzi < 360; tarAzi += RESAMPLED_HRTF_ANGLE_INTERVAL)
     {
         for (int tarEle = 0; tarEle < 360; tarEle += RESAMPLED_HRTF_ANGLE_INTERVAL)
         {
-            double tarAziRad = static_cast<double>(tarAzi) * juce::double_Pi / 180.0;
-            double tarEleRad = static_cast<double>(tarEle) * juce::double_Pi / 180.0;
-
             // Get distances between current target azi/ele and all measurements in sofa file
             std::vector<DistMapping> distMappingList;
             for (int measurementIdx = 0; measurementIdx < numMeasurements; ++measurementIdx)
@@ -189,19 +205,7 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
                 double azi = sourcePositions[measurementIdx * 3];
                 double ele = sourcePositions[(measurementIdx * 3) + 1];
 
-                double aziDiffRad = (static_cast<double>(tarAzi) - azi) * juce::double_Pi / 180.0;
-                double eleDiffRad = (static_cast<double>(tarEle) - ele) * juce::double_Pi / 180.0;
-                double aziRad = azi * juce::double_Pi / 180.0;
-                double eleRad = ele * juce::double_Pi / 180.0;
-
-                // Haversine fomula
-                double dist = 2.0 * radius * std::asin(std::sqrt((1.0 - std::cos(aziDiffRad) + std::cos(aziRad) *
-                    std::cosf(tarAziRad) * (1.0 - std::cos(eleDiffRad))) / 2.0));
-                while (dist > circumference / 2.0)
-                {
-                    dist -= circumference / 2.0;
-                }
-
+                double dist = calcSphericaldist(static_cast<double>(tarAzi), static_cast<double>(tarEle), azi, ele, m_radius);
                 DistMapping distMapping{ measurementIdx, dist, azi, ele };
                 distMappingList.push_back(distMapping);
             }

@@ -49,8 +49,9 @@ private:
 	std::unique_ptr<juce::FileChooser> m_fileChooser;
 
 	// IRs
+	double m_radius; // Distance at which HRTF was measured
 	int m_IRNumSamples; // number of samples contained in one IR measurement
-	std::vector< IRMapping> m_IRMappingCollection;
+	std::vector< IRMapping> m_IRMappingCollection; // Collect of IRs, their posittions and ITDs
 
 	// Convolver output history
 	std::unique_ptr<float[]> m_leftConvolveOutput;
