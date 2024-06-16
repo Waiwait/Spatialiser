@@ -24,17 +24,17 @@ private:
 		PREPARED
 	};
 
-	struct IRMapping
+	struct HRTFMapping
 	{
 		double m_azi;
 		double m_ele;
 		int m_leftITD;
 		int m_rightITD;
-		std::shared_ptr<float[]> m_leftIR;
-		std::shared_ptr<float[]> m_rightIR;
+		std::unique_ptr<float[]> m_leftIR;
+		std::unique_ptr<float[]> m_rightIR;
 	};
 
-	void convolve(float* leftSignal, float* rightSignal, std::shared_ptr<float[]> leftIR, std::shared_ptr<float[]> rightIR);
+	void convolve(float* leftSignal, float* rightSignal, std::unique_ptr<float[]>& leftIR, std::unique_ptr<float[]>& rightIR);
 
 	float m_azi;
 	float m_ele;
@@ -48,10 +48,10 @@ private:
 	// Sofa file
 	std::unique_ptr<juce::FileChooser> m_fileChooser;
 
-	// IRs
+	// HRTF collection (interpolated at set angle intervals)
 	double m_radius; // Distance at which HRTF was measured
 	int m_IRNumSamples; // number of samples contained in one IR measurement
-	std::vector< IRMapping> m_IRMappingCollection; // Collect of IRs, their posittions and ITDs
+	std::vector< HRTFMapping> m_HRTFMappingCollection; // Collect of HRTFs, their posittions and ITDs
 
 	// Convolver output history
 	std::unique_ptr<float[]> m_leftConvolveOutput;

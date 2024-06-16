@@ -213,11 +213,12 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
             // Sort mapping by distances
             std::sort(distMappingList.begin(), distMappingList.end(), compareDist);
 
-            // Get target HRTF and ITD from interpolation
-            std::shared_ptr<float[]> interpolatedLeftIR(new float[m_IRNumSamples]);
-            std::shared_ptr<float[]> interpolatedRightIR(new float[m_IRNumSamples]);
-            int interpolatedLeftITD = 0.0f;
-            int interpolatedRightITD = 0.0f;
+            // Initialise an HRTF mapping
+            HRTFMapping& interpHRTFMapping = m_HRTFMappingCollection.emplace_back();
+            interpHRTFMapping.m_azi = tarAzi;
+            interpHRTFMapping.m_ele = tarEle;
+            interpHRTFMapping.m_leftIR = std::make_unique<float[]>(m_IRNumSamples);
+            interpHRTFMapping.m_rightIR = std::make_unique<float[]>(m_IRNumSamples);
 
             if (juce::approximatelyEqual(distMappingList[0].m_distance, 0.0))
             {
@@ -225,11 +226,11 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
                 float* leftIR = &fRawIRs[distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers];
                 float* rightIR = &fRawIRs[(distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
 
-                std::memcpy(interpolatedLeftIR.get(), leftIR, m_IRNumSamples * sizeof(float));
-                std::memcpy(interpolatedRightIR.get(), rightIR, m_IRNumSamples * sizeof(float));
+                std::memcpy(interpHRTFMapping.m_leftIR.get(), leftIR, m_IRNumSamples * sizeof(float));
+                std::memcpy(interpHRTFMapping.m_rightIR.get(), rightIR, m_IRNumSamples * sizeof(float));
 
-                interpolatedLeftITD = rawITDs[distMappingList[0].m_measurementIdx * numReceivers];
-                interpolatedRightITD = rawITDs[distMappingList[0].m_measurementIdx * numReceivers + 1];
+                interpHRTFMapping.m_leftITD = rawITDs[distMappingList[0].m_measurementIdx * numReceivers];
+                interpHRTFMapping.m_rightITD = rawITDs[distMappingList[0].m_measurementIdx * numReceivers + 1];
             }
             else
             {
@@ -301,23 +302,14 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
 
                 for (int i = 0; i < m_IRNumSamples; ++i)
                 {
-                    interpolatedLeftIR[i] = a * leftIR1[i] + b * leftIR2[i] + c * leftIR3[i];
-                    interpolatedRightIR[i] = a * rightIR1[i] + b * rightIR2[i] + c * rightIR3[i];
+                    interpHRTFMapping.m_leftIR[i] = a * leftIR1[i] + b * leftIR2[i] + c * leftIR3[i];
+                    interpHRTFMapping.m_rightIR[i] = a * rightIR1[i] + b * rightIR2[i] + c * rightIR3[i];
                 }
-                interpolatedLeftITD = std::round(a * static_cast<float>(leftITD1) + b * static_cast<float>(leftITD2) + 
+                interpHRTFMapping.m_leftITD = std::round(a * static_cast<float>(leftITD1) + b * static_cast<float>(leftITD2) +
                     c * static_cast<float>(leftITD3));
-                interpolatedRightITD = std::round(a * static_cast<float>(rightITD1) + b * static_cast<float>(rightITD2) + 
+                interpHRTFMapping.m_rightITD = std::round(a * static_cast<float>(rightITD1) + b * static_cast<float>(rightITD2) +
                     c * static_cast<float>(rightITD3));
             }
-
-            IRMapping irMapping;
-            irMapping.m_azi = tarAzi;
-            irMapping.m_ele = tarEle;
-            irMapping.m_leftIR = interpolatedLeftIR;
-            irMapping.m_rightIR = interpolatedRightIR;
-            irMapping.m_leftITD = interpolatedLeftITD;
-            irMapping.m_rightITD = interpolatedRightITD;
-            m_IRMappingCollection.push_back(irMapping);
         }
     }
 
@@ -337,7 +329,7 @@ void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& buffe
 
         // STEP 3 CONVOLVE
         convolve(bufferToFill.buffer->getWritePointer(0), bufferToFill.buffer->getWritePointer(1), 
-            m_IRMappingCollection[0].m_leftIR, m_IRMappingCollection[0].m_rightIR);
+            m_HRTFMappingCollection[0].m_leftIR, m_HRTFMappingCollection[0].m_rightIR);
 
         // STEP 4: ITD
     }
@@ -349,7 +341,8 @@ void SpatialiserController::setPosition(double azi, double ele)
     m_ele = ele;
 }
 
-void SpatialiserController::convolve(float* leftSignal, float* rightSignal, std::shared_ptr<float[]> leftIR, std::shared_ptr<float[]> rightIR)
+void SpatialiserController::convolve(float* leftSignal, float* rightSignal, std::unique_ptr<float[]>& leftIR, 
+    std::unique_ptr<float[]>& rightIR)
 {
     // Erase first segment (size of input buffer) of our local convolver output buffer and shift data forward
     std::memcpy(&m_leftConvolveOutput[0], &m_leftConvolveOutput[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
