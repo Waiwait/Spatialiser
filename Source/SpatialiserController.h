@@ -6,6 +6,14 @@
 class SpatialiserController
 {
 public:
+	struct DistMapping
+	{
+		int m_mappingIdx;
+		double m_distance;
+		double m_azi;
+		double m_ele;
+	};
+
 	SpatialiserController();
 	~SpatialiserController();
 
@@ -15,7 +23,7 @@ public:
 	void loadHRTFData(sofa::GeneralFIR& file);
 
 	void setPosition(double azi, double ele);
-	void spatialise(const juce::AudioSourceChannelInfo& bufferToFill, float azi, float ele);
+	void spatialise(const juce::AudioSourceChannelInfo& bufferToFill);
 
 private:
 	enum State
@@ -28,16 +36,13 @@ private:
 	{
 		double m_azi;
 		double m_ele;
-		int m_leftITD;
-		int m_rightITD;
-		std::unique_ptr<float[]> m_leftIR;
-		std::unique_ptr<float[]> m_rightIR;
+		// 0 = left ear, 1 = right ear
+		int m_ITD[2];
+		std::unique_ptr<float[]> m_IR[2];
 	};
 
+	void interpolateHRTF(HRTFMapping& targetHRTF, const std::vector< HRTFMapping >& hrtfMappingList);
 	void convolve(float* leftSignal, float* rightSignal, std::unique_ptr<float[]>& leftIR, std::unique_ptr<float[]>& rightIR);
-
-	float m_azi;
-	float m_ele;
 
 	State m_state;
 
@@ -48,10 +53,17 @@ private:
 	// Sofa file
 	std::unique_ptr<juce::FileChooser> m_fileChooser;
 
-	// HRTF collection (interpolated at set angle intervals)
+	// HRTFs
 	double m_radius; // Distance at which HRTF was measured
 	int m_IRNumSamples; // number of samples contained in one IR measurement
-	std::vector< HRTFMapping> m_HRTFMappingCollection; // Collect of HRTFs, their posittions and ITDs
+	std::vector< HRTFMapping> m_HRTFMappingCollection; // Collection of HRTFs, their posittions and ITDs
+
+	// List of points and how far they are from a target point. Used in data prep when interpolating from raw data and
+	// during run-time spatialisation when interpolating from prepped data
+	std::vector<DistMapping> m_distMappingList;
+
+	// Final interpolated HRTF to use when spatialising
+	HRTFMapping m_outputHRTF;
 
 	// Convolver output history
 	std::unique_ptr<float[]> m_leftConvolveOutput;

@@ -3,14 +3,6 @@
 const int RESAMPLED_HRTF_ANGLE_INTERVAL = 5;
 const float HRTF_REL_ONSET_THRESHOLD = 0.31f;
 
-struct DistMapping
-{
-    int m_measurementIdx;
-    double m_distance;
-    double m_azi;
-    double m_ele;
-};
-
 struct Triangle
 {
     double m_azi1;
@@ -21,7 +13,7 @@ struct Triangle
     double m_ele3;
 };
 
-bool compareDist(DistMapping& a, DistMapping& b)
+bool compareDist(SpatialiserController::DistMapping& a, SpatialiserController::DistMapping& b)
 {
     return (a.m_distance < b.m_distance);
 }
@@ -53,14 +45,18 @@ double calcSphericaldist(double aAzi, double aEle, double bAzi, double bEle, dou
     double eleDiffRad = aEleRad - bEleRad;
 
     // Haversine formula
-    double dist = 2.0 * radius * std::asin(std::sqrt((1.0 - std::cos(aziDiffRad) + std::cos(bAziRad) *
-        std::cosf(aAziRad) * (1.0 - std::cos(eleDiffRad))) / 2.0));
-    while (dist > circumference / 2.0)
-    {
-        dist -= circumference / 2.0;
-    }
+    double a = juce::jmin(sin(eleDiffRad / 2.0) * sin(eleDiffRad / 2.0) +
+        cos(aEleRad) * cos(bEleRad) *
+        sin(aziDiffRad / 2.0) * sin(aziDiffRad / 2.0), 1.0);
 
-    return dist;
+    double c = 2 * atan2(sqrt(a), sqrt(1.0 - a));
+
+    return c * radius;
+}
+
+bool approximatelyEqual(double a, double b, double c)
+{
+    return juce::approximatelyEqual(a, b) && juce::approximatelyEqual(b, c);
 }
 
 bool getBarycentricCoeffs(double tarAzi, double tarEle, Triangle& t, double& a, double& b, double& c)
@@ -73,7 +69,7 @@ bool getBarycentricCoeffs(double tarAzi, double tarEle, Triangle& t, double& a, 
 
     a = (angDiff(t.m_ele2, t.m_ele3) * angDiff(tarAzi, t.m_azi3) + angDiff(t.m_azi3, t.m_azi2) * angDiff(tarEle, t.m_ele3))
         / denom;
-    b = (angDiff(t.m_ele3, t.m_ele1) * (tarAzi, t.m_azi3) + angDiff(t.m_azi1, t.m_azi3) * angDiff(tarEle, t.m_ele3))
+    b = (angDiff(t.m_ele3, t.m_ele1) * angDiff(tarAzi, t.m_azi3) + angDiff(t.m_azi1, t.m_azi3) * angDiff(tarEle, t.m_ele3))
         / denom;
     c = 1.0 - a - b;
 
@@ -87,8 +83,13 @@ SpatialiserController::SpatialiserController()
     : m_state(UNPREPARED)
     , m_numSamplesPerBlock(0)
     , m_inputSampleRate(0)
+    , m_radius(0.0)
     , m_IRNumSamples(0)
 {
+    m_outputHRTF.m_azi = 0.0;
+    m_outputHRTF.m_ele = 0.0;
+    m_outputHRTF.m_ITD[0] = 0.0;
+    m_outputHRTF.m_ITD[1] = 0.0;
 }
 
 SpatialiserController::~SpatialiserController()
@@ -143,41 +144,51 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
     // Store off distance of measurement (assume that distance is the same for all measurements)
     m_radius = sourcePositions[2];
 
-    // Store raw IRs as floats (since JUCE requires in floats)
-    std::unique_ptr<double[]> dRawIRs(new double[numMeasurements * numReceivers * m_IRNumSamples]);
-    std::unique_ptr<float[]> fRawIRs(new float[numMeasurements * numReceivers * m_IRNumSamples]);
-    file.GetDataIR(dRawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples);
-    for (int idx = 0; idx < numMeasurements * numReceivers * m_IRNumSamples; ++idx)
-    {
-        fRawIRs[idx] = static_cast<float>(dRawIRs[idx]);
-    }
+    // Get raw IRs
+    std::unique_ptr<double[]> rawIRs(new double[numMeasurements * numReceivers * m_IRNumSamples]);
+    file.GetDataIR(rawIRs.get(), numMeasurements, numReceivers, m_IRNumSamples);
 
-    // Calculate ITDs for raw IRs
-    std::unique_ptr<int[]> rawITDs(new int[numMeasurements * numReceivers]);
+    // Go through each measurement in SOFA file and store them in our HRTF mapping list
+    std::vector<HRTFMapping> rawHRTFMappingList;
     for (int measurementIdx = 0; measurementIdx < numMeasurements; ++measurementIdx)
     {
+        HRTFMapping& hrtfMapping = rawHRTFMappingList.emplace_back();
+
+        // Store azi and ele positions
+        hrtfMapping.m_azi = sourcePositions[measurementIdx * 3];
+        hrtfMapping.m_ele = sourcePositions[measurementIdx * 3 + 1];
+
         for (int receiverIdx = 0; receiverIdx < 2; ++receiverIdx)
         {
-            float* IR = &fRawIRs[(measurementIdx * 2 + receiverIdx) * m_IRNumSamples];
-
-            // Find peak val
-            float peakVal = 0;
-            for (int idx = 0; idx < m_IRNumSamples; ++idx)
+            // Store raw IRs as floats (since JUCE requires floats)
+            hrtfMapping.m_IR[receiverIdx] = std::make_unique<float[]>(m_IRNumSamples);
+            for (int sampleIdx = 0; sampleIdx < m_IRNumSamples; ++sampleIdx)
             {
-                if (IR[idx] > peakVal)
+                hrtfMapping.m_IR[receiverIdx][sampleIdx] = static_cast<float>(rawIRs[(measurementIdx * 2 + receiverIdx) *
+                    m_IRNumSamples + sampleIdx]);
+            }
+
+            // Find peak val in IR
+            float peakVal = 0.0f;
+            for (int sampleIdx = 0; sampleIdx < m_IRNumSamples; ++sampleIdx)
+            {
+                if (hrtfMapping.m_IR[receiverIdx][sampleIdx] > peakVal)
                 {
-                    peakVal = IR[idx];
+                    peakVal = hrtfMapping.m_IR[receiverIdx][sampleIdx];
                 }
             }
 
-            // Calculate IR onset threshold and store this
-            int* ITD = &rawITDs[measurementIdx * 2 + receiverIdx];
+            // Calculate IR onset threshold
             float onsetThreshold = HRTF_REL_ONSET_THRESHOLD * peakVal;
+
+            // Find the ITD (first sample in IR that surpasses the threshold) and store this
+            int ITD = 0;
             for (int sampleIdx = 0; sampleIdx < m_IRNumSamples; ++sampleIdx)
             {
-                if (IR[sampleIdx] > onsetThreshold)
+                if (hrtfMapping.m_IR[receiverIdx][sampleIdx] > onsetThreshold)
                 {
-                    *ITD = sampleIdx;
+                    ITD = sampleIdx;
+                    hrtfMapping.m_ITD[receiverIdx] = ITD;
                     break;
                 }
                 if (sampleIdx == m_IRNumSamples - 1)
@@ -186,159 +197,219 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
                 }
             }
 
-            // Remove ITDs for raw IRs
-            std::memcpy(IR, &IR[*ITD], (m_IRNumSamples - *ITD) * sizeof(float));
-            std::memset(&IR[m_IRNumSamples - *ITD], 0.0f, *ITD * sizeof(float));
+            // Remove ITDs from IRs
+            std::memcpy(&hrtfMapping.m_IR[receiverIdx][0], &hrtfMapping.m_IR[receiverIdx][ITD], (m_IRNumSamples - ITD) * sizeof(float));
+            std::memset(&hrtfMapping.m_IR[receiverIdx][m_IRNumSamples - ITD], 0.0f, ITD * sizeof(float));
+        }
+
+        // For +-90 deg ele, SOFA files will have one measurement at 0 deg azi, since the azi doesn't matter at +90deg
+        // ele. But this messes up our barycentric calculation later which doesn't account for spherical coordinates,
+        // so throw in some dummy mappings at +-90deg ele at different azi positions.
+        if (juce::approximatelyEqual(std::abs(hrtfMapping.m_ele), 90.0))
+        {
+            for (double azi = 5.0; azi < 360; azi += static_cast<double>(RESAMPLED_HRTF_ANGLE_INTERVAL))
+            {
+                HRTFMapping& hrtfMapping = rawHRTFMappingList.emplace_back();
+                hrtfMapping.m_azi = azi;
+                hrtfMapping.m_ele = rawHRTFMappingList[rawHRTFMappingList.size() - 2].m_ele;
+                for (int receiverIdx = 0; receiverIdx < 2; ++receiverIdx)
+                {
+                    hrtfMapping.m_ITD[receiverIdx] = rawHRTFMappingList[rawHRTFMappingList.size() - 2].m_ITD[receiverIdx];
+                    hrtfMapping.m_IR[receiverIdx] = std::make_unique<float[]>(m_IRNumSamples);
+                    std::memcpy(&hrtfMapping.m_IR[receiverIdx][0], &rawHRTFMappingList[rawHRTFMappingList.size() - 2].m_IR[receiverIdx][0],
+                        m_IRNumSamples * sizeof(float));
+                }
+            }
         }
     }
 
-    // Interpolate HRTFs in 5 deg intervals
+    // Interpolate HRTFs in 5 deg intervals and store this collection
     for (int tarAzi = 0; tarAzi < 360; tarAzi += RESAMPLED_HRTF_ANGLE_INTERVAL)
     {
-        for (int tarEle = 0; tarEle < 360; tarEle += RESAMPLED_HRTF_ANGLE_INTERVAL)
+        for (int tarEle = -90; tarEle <= 90; tarEle += RESAMPLED_HRTF_ANGLE_INTERVAL)
         {
-            // Get distances between current target azi/ele and all measurements in sofa file
-            std::vector<DistMapping> distMappingList;
-            for (int measurementIdx = 0; measurementIdx < numMeasurements; ++measurementIdx)
-            {
-                // Ele and azi for current measurement in SOFA file
-                double azi = sourcePositions[measurementIdx * 3];
-                double ele = sourcePositions[(measurementIdx * 3) + 1];
+            HRTFMapping& hrtfMapping = m_HRTFMappingCollection.emplace_back();
+            hrtfMapping.m_azi = tarAzi;
+            hrtfMapping.m_ele = tarEle;
+            hrtfMapping.m_IR[0] = std::make_unique<float[]>(m_IRNumSamples);
+            hrtfMapping.m_IR[1] = std::make_unique<float[]>(m_IRNumSamples);
+            hrtfMapping.m_ITD[0] = 0;
+            hrtfMapping.m_ITD[1] = 0;
 
-                double dist = calcSphericaldist(static_cast<double>(tarAzi), static_cast<double>(tarEle), azi, ele, m_radius);
-                DistMapping distMapping{ measurementIdx, dist, azi, ele };
-                distMappingList.push_back(distMapping);
-            }
-
-            // Sort mapping by distances
-            std::sort(distMappingList.begin(), distMappingList.end(), compareDist);
-
-            // Initialise an HRTF mapping
-            HRTFMapping& interpHRTFMapping = m_HRTFMappingCollection.emplace_back();
-            interpHRTFMapping.m_azi = tarAzi;
-            interpHRTFMapping.m_ele = tarEle;
-            interpHRTFMapping.m_leftIR = std::make_unique<float[]>(m_IRNumSamples);
-            interpHRTFMapping.m_rightIR = std::make_unique<float[]>(m_IRNumSamples);
-
-            if (juce::approximatelyEqual(distMappingList[0].m_distance, 0.0))
-            {
-                // We have a source HRTF at this position, so just use this instead of interpolating
-                float* leftIR = &fRawIRs[distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers];
-                float* rightIR = &fRawIRs[(distMappingList[0].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-
-                std::memcpy(interpHRTFMapping.m_leftIR.get(), leftIR, m_IRNumSamples * sizeof(float));
-                std::memcpy(interpHRTFMapping.m_rightIR.get(), rightIR, m_IRNumSamples * sizeof(float));
-
-                interpHRTFMapping.m_leftITD = rawITDs[distMappingList[0].m_measurementIdx * numReceivers];
-                interpHRTFMapping.m_rightITD = rawITDs[distMappingList[0].m_measurementIdx * numReceivers + 1];
-            }
-            else
-            {
-                // Barycentric interpolate the IR between 3 closest measurements
-
-                // Barycentric coefficients
-                double a = 0.0f;
-                double b = 0.0f;
-                double c = 0.0f;
-
-                int IR1Idx = 0;
-                int IR2Idx = 1;
-                int IR3Idx = 2;
-
-                bool valid = false;
-                while (!valid)
-                {
-                    double azi1 = distMappingList[IR1Idx].m_azi;
-                    double ele1 = distMappingList[IR1Idx].m_ele;
-                    double azi2 = distMappingList[IR2Idx].m_azi;
-                    double ele2 = distMappingList[IR2Idx].m_ele;
-                    double azi3 = distMappingList[IR3Idx].m_azi;
-                    double ele3 = distMappingList[IR3Idx].m_ele;
-
-                    // Make sure three closest HRTFs to the target coordinate are all on the same plane or the target
-                    // isn't enclosed in the triangle for the three HRTFs. So find the next HRTF that isn't for the 
-                    // third one
-                    Triangle triangle{ azi1, ele1, azi2, ele2, azi3, ele3 };
-                    if (!getBarycentricCoeffs(tarAzi, tarEle, triangle, a, b, c))
-                    {
-                        ++IR3Idx;
-                        if (IR3Idx >= numMeasurements)
-                        {
-                            ++IR2Idx;
-                            IR3Idx = IR2Idx + 1;
-                        }
-                        if (IR2Idx >= numMeasurements - 1)
-                        {
-                            ++IR1Idx;
-                            IR2Idx = IR1Idx + 1;
-                            IR3Idx = IR2Idx + 1;
-                        }
-                        if (IR3Idx >= numMeasurements)
-                        {
-                            // We failed to find points that enclose the target. This should never happen and is likely
-                            // a code error
-                            int g = 0;
-                        }
-                    }
-                    else
-                    {
-                        valid = true;
-                    }
-                }
-
-                // Interpolate
-                float* leftIR1 = &fRawIRs[distMappingList[IR1Idx].m_measurementIdx * m_IRNumSamples * numReceivers];
-                float* rightIR1 = &fRawIRs[(distMappingList[IR1Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                float* leftIR2 = &fRawIRs[distMappingList[IR2Idx].m_measurementIdx * m_IRNumSamples * numReceivers];
-                float* rightIR2 = &fRawIRs[(distMappingList[IR2Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                float* leftIR3 = &fRawIRs[distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers];
-                float* rightIR3 = &fRawIRs[(distMappingList[IR3Idx].m_measurementIdx * m_IRNumSamples * numReceivers) + m_IRNumSamples];
-                int leftITD1 = rawITDs[distMappingList[IR1Idx].m_measurementIdx * numReceivers];
-                int rightITD1 = rawITDs[distMappingList[IR1Idx].m_measurementIdx * numReceivers + 1];
-                int leftITD2 = rawITDs[distMappingList[IR2Idx].m_measurementIdx * numReceivers];
-                int rightITD2 = rawITDs[distMappingList[IR2Idx].m_measurementIdx * numReceivers + 1];
-                int leftITD3 = rawITDs[distMappingList[IR3Idx].m_measurementIdx * numReceivers];
-                int rightITD3 = rawITDs[distMappingList[IR3Idx].m_measurementIdx * numReceivers + 1];
-
-                for (int i = 0; i < m_IRNumSamples; ++i)
-                {
-                    interpHRTFMapping.m_leftIR[i] = a * leftIR1[i] + b * leftIR2[i] + c * leftIR3[i];
-                    interpHRTFMapping.m_rightIR[i] = a * rightIR1[i] + b * rightIR2[i] + c * rightIR3[i];
-                }
-                interpHRTFMapping.m_leftITD = std::round(a * static_cast<float>(leftITD1) + b * static_cast<float>(leftITD2) +
-                    c * static_cast<float>(leftITD3));
-                interpHRTFMapping.m_rightITD = std::round(a * static_cast<float>(rightITD1) + b * static_cast<float>(rightITD2) +
-                    c * static_cast<float>(rightITD3));
-            }
+            interpolateHRTF(hrtfMapping, rawHRTFMappingList);
         }
     }
 
+    // We don't need as many elements when we use this for realtime interpolation, so reallocate the memory.
+    m_distMappingList.shrink_to_fit();
+
+    // Prep our convolution buffers
     m_leftConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
     m_rightConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
+
+    // Prep out final output HRTF buffers
+    m_outputHRTF.m_IR[0] = std::make_unique<float[]>(m_IRNumSamples);
+    m_outputHRTF.m_IR[1] = std::make_unique<float[]>(m_IRNumSamples);
+
+    // Interpolate for our current azi and ele
+    interpolateHRTF(m_outputHRTF, m_HRTFMappingCollection);
 
     m_state = PREPARED;
 }
 
-void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& bufferToFill, float inputAzi, float inputEle)
+void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& bufferToFill)
 {
     if (m_state == PREPARED)
     {
-        // STEP 1 - Find closest IRS
-
-        // STEP 2 INTERPOLATE
-
-        // STEP 3 CONVOLVE
+        // Convolve
         convolve(bufferToFill.buffer->getWritePointer(0), bufferToFill.buffer->getWritePointer(1), 
-            m_HRTFMappingCollection[0].m_leftIR, m_HRTFMappingCollection[0].m_rightIR);
+            m_outputHRTF.m_IR[0], m_outputHRTF.m_IR[1]);
 
-        // STEP 4: ITD
+        // Apply ITD (TODO)
     }
 }
 
 void SpatialiserController::setPosition(double azi, double ele)
 {
-    m_azi = azi;
-    m_ele = ele;
+    m_outputHRTF.m_azi= azi;
+    m_outputHRTF.m_ele = ele;
+    
+    if (m_state == PREPARED)
+    {
+        interpolateHRTF(m_outputHRTF, m_HRTFMappingCollection);
+    }
+}
+
+void SpatialiserController::interpolateHRTF(HRTFMapping& targetHRTF, const std::vector< HRTFMapping >& hrtfMappingList)
+{
+    // Get distances between current target azi/ele and all HRTFs in list
+    for (int i = 0; i < hrtfMappingList.size(); ++i)
+    {
+        DistMapping& distMapping = m_distMappingList.emplace_back();
+        distMapping.m_mappingIdx = i;
+        distMapping.m_azi = hrtfMappingList[i].m_azi;
+        distMapping.m_ele = hrtfMappingList[i].m_ele;
+        distMapping.m_distance = calcSphericaldist(targetHRTF.m_azi, targetHRTF.m_ele , hrtfMappingList[i].m_azi,
+            hrtfMappingList[i].m_ele, m_radius);
+    }
+
+    // Sort our list of distance mappings by distance
+    std::sort(m_distMappingList.begin(), m_distMappingList.end(), compareDist);
+
+    // Calculate HRTF at our target position
+    if (juce::approximatelyEqual(m_distMappingList[0].m_distance, 0.0) || 
+        juce::approximatelyEqual(std::abs(targetHRTF.m_ele), 90.0))
+    {
+        // We have a HRTF at this position in our list, so just use this instead of interpolating
+        int mappingIdx = m_distMappingList[0].m_mappingIdx;
+
+        for (int receiverIdx = 0; receiverIdx < 2; ++receiverIdx)
+        {
+            std::memcpy(&targetHRTF.m_IR[receiverIdx][0], &hrtfMappingList[mappingIdx].m_IR[receiverIdx][0],
+                m_IRNumSamples * sizeof(float));
+            targetHRTF.m_ITD[receiverIdx] = hrtfMappingList[mappingIdx].m_ITD[receiverIdx];
+        }
+    }
+    else if (approximatelyEqual(targetHRTF.m_azi, m_distMappingList[0].m_azi, m_distMappingList[1].m_azi) 
+          || approximatelyEqual(targetHRTF.m_ele, m_distMappingList[0].m_ele, m_distMappingList[1].m_ele))
+    {
+        // The target point lies on the same plane as the closest two points. So just linearly interpolate between these 
+        // two points
+    
+        double factor = 0.0;
+        if (approximatelyEqual(targetHRTF.m_azi, m_distMappingList[0].m_azi, m_distMappingList[1].m_azi))
+        {
+            // All points on azimuth plane, so calculate factor using elevation differences
+            factor = std::abs(angDiff(targetHRTF.m_ele, m_distMappingList[0].m_ele) /
+                angDiff(m_distMappingList[0].m_ele, m_distMappingList[1].m_ele));
+        }
+        else
+        {
+            // All points on elevation plane, so calculate factor using azimuth differences
+            factor = std::abs(angDiff(targetHRTF.m_azi, m_distMappingList[0].m_azi) /
+                angDiff(m_distMappingList[0].m_azi, m_distMappingList[1].m_azi));
+        }
+        
+        for (int receiverIdx = 0; receiverIdx < 2; ++receiverIdx)
+        {
+            // Interpolate IRs
+            for (int idx = 0; idx < m_IRNumSamples; ++idx)
+            {
+                targetHRTF.m_IR[receiverIdx][idx] = (1.0 - factor) * hrtfMappingList[m_distMappingList[0].m_mappingIdx].m_IR[receiverIdx][idx] +
+                    factor * hrtfMappingList[m_distMappingList[1].m_mappingIdx].m_IR[receiverIdx][idx];
+            }
+            targetHRTF.m_ITD[receiverIdx] = juce::roundToInt( (1.0 - factor) * hrtfMappingList[m_distMappingList[0].m_mappingIdx].m_ITD[receiverIdx] +
+                factor * hrtfMappingList[m_distMappingList[1].m_mappingIdx].m_ITD[receiverIdx] );
+        }
+    }
+    else
+    {
+        // Barycentric interpolate the IR between 3 closest measurements
+
+        // Barycentric coefficients
+        double a = 0.0f;
+        double b = 0.0f;
+        double c = 0.0f;
+
+        int distMapping1Idx = 0;
+        int distMapping2Idx = 1;
+        int distMapping3Idx = 2;
+
+        bool done = false;
+        while (!done)
+        {
+            // Make sure three closest HRTFs to the target coordinate enclose the target position in a triangle.
+            int hrtfIdx1 = m_distMappingList[distMapping1Idx].m_mappingIdx;
+            double azi1 = m_distMappingList[distMapping1Idx].m_azi;
+            double ele1 = m_distMappingList[distMapping1Idx].m_ele;
+            int hrtfIdx2 = m_distMappingList[distMapping2Idx].m_mappingIdx;
+            double azi2 = m_distMappingList[distMapping2Idx].m_azi;
+            double ele2 = m_distMappingList[distMapping2Idx].m_ele;
+            int hrtfIdx3 = m_distMappingList[distMapping3Idx].m_mappingIdx;
+            double azi3 = m_distMappingList[distMapping3Idx].m_azi;
+            double ele3 = m_distMappingList[distMapping3Idx].m_ele;
+            Triangle triangle{ azi1, ele1, azi2, ele2, azi3, ele3 };
+
+            if (!getBarycentricCoeffs(targetHRTF.m_azi, targetHRTF.m_ele, triangle, a, b, c))
+            {
+                ++distMapping3Idx;
+                if (distMapping3Idx >= hrtfMappingList.size())
+                {
+                    ++distMapping2Idx;
+                    distMapping3Idx = distMapping2Idx + 1;
+                }
+                if (distMapping2Idx >= hrtfMappingList.size() - 1)
+                {
+                    ++distMapping1Idx;
+                    distMapping2Idx = distMapping1Idx + 1;
+                    distMapping3Idx = distMapping2Idx + 1;
+                }
+                if (distMapping1Idx >= hrtfMappingList.size() - 2)
+                {
+                    // We failed to find points that enclose the target. This should never happen and is likely
+                    // a code error
+                    int g = 0;
+                }
+            }
+            else
+            {
+                for (int receiverIdx = 0; receiverIdx < 2; ++receiverIdx)
+                {
+                    for (int idx = 0; idx < m_IRNumSamples; ++idx)
+                    {
+                        targetHRTF.m_IR[receiverIdx][idx] = a * hrtfMappingList[hrtfIdx1].m_IR[receiverIdx][idx] +
+                            b * hrtfMappingList[hrtfIdx2].m_IR[receiverIdx][idx] +
+                            c * hrtfMappingList[hrtfIdx3].m_IR[receiverIdx][idx];
+                    }
+                    targetHRTF.m_ITD[receiverIdx] = a * hrtfMappingList[hrtfIdx1].m_ITD[receiverIdx] +
+                        b * hrtfMappingList[hrtfIdx2].m_ITD[receiverIdx] +
+                        c * hrtfMappingList[hrtfIdx3].m_ITD[receiverIdx];
+                }
+                done = true;
+            }
+        }
+    }
+    m_distMappingList.clear();
 }
 
 void SpatialiserController::convolve(float* leftSignal, float* rightSignal, std::unique_ptr<float[]>& leftIR, 
