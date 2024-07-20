@@ -100,6 +100,7 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& buffe
     }
 
     m_audioFileController.getNextAudioBlock(bufferToFill);
+    m_spatialiserController.spatialise(bufferToFill);
 }
 
 void MainComponent::releaseResources()
@@ -136,5 +137,8 @@ void MainComponent::resized()
 
 void MainComponent::onSliderChange()
 {
-    m_spatialiserController.setPosition(m_aziDial.getValue(), m_eleSlider.getValue());
+    // Azimuth angles in SOFA files increase anticlockwise (i.e. towards the left), whereas the juce rotary slider 
+    // increases clockwise. The best thing to do would be to make a new loolandfeel for the rotary slider, but I'm lazy. 
+    // So just the value from the azimuth slider to be negative it's value.
+    m_spatialiserController.setPosition(-m_aziDial.getValue(), m_eleSlider.getValue());
 }
