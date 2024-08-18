@@ -1,4 +1,4 @@
-Demo video - https://github.com/KevinSum/Spatialiser
+Demo video - https://www.youtube.com/watch?v=HG9u9gKIuLM
 
 Projucer Exporter Settings
 - Add "../../Libraries/libsofa/lib" and "../../Libraries/libsofa/dependencies/lib/win" to Extra Library Search Paths
