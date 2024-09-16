@@ -42,7 +42,7 @@ private:
 	};
 
 	void interpolateHRTF(HRTFMapping& targetHRTF, const std::vector< HRTFMapping >& hrtfMappingList);
-	void convolve(float* leftSignal, float* rightSignal, std::unique_ptr<float[]>& leftIR, std::unique_ptr<float[]>& rightIR);
+	void convolve(juce::AudioSampleBuffer& buffer);
 
 	State m_state;
 
@@ -65,7 +65,18 @@ private:
 	// Final interpolated HRTF to use when spatialising
 	HRTFMapping m_outputHRTF;
 
-	// Convolver output history
-	std::unique_ptr<float[]> m_leftConvolveOutput;
-	std::unique_ptr<float[]> m_rightConvolveOutput;
+	// FFT Convolution
+
+	std::unique_ptr<float[]> m_delayLine[2];
+	int m_delayLineSamplesAvailable;
+	int m_delayLineSize;
+
+	std::unique_ptr<juce::dsp::WindowingFunction<float>> m_windowController;
+	std::unique_ptr<juce::dsp::FFT> m_fftController;
+
+	std::unique_ptr<float[]> m_irFft;
+	std::unique_ptr<float[]> m_inputFft;
+	std::unique_ptr<float[]> m_convolveOutput[2];
+	int m_samplesConvolved;
+	int m_convolveOutputBufferSize;
 };

@@ -2,6 +2,9 @@
 
 const int RESAMPLED_HRTF_ANGLE_INTERVAL = 5;
 const float HRTF_REL_ONSET_THRESHOLD = 0.31f;
+const int FFT_SIZE = 2048;
+const int FFT_BINS = log2(FFT_SIZE);
+const float FFT_HOP = 0.5f;
 
 struct Triangle
 {
@@ -85,6 +88,10 @@ SpatialiserController::SpatialiserController()
     , m_inputSampleRate(0)
     , m_radius(0.0)
     , m_IRNumSamples(0)
+    , m_delayLineSamplesAvailable(0)
+    , m_delayLineSize(0)
+    , m_samplesConvolved(0)
+    , m_convolveOutputBufferSize(0)
 {
     m_outputHRTF.m_azi = 0.0;
     m_outputHRTF.m_ele = 0.0;
@@ -106,9 +113,9 @@ void SpatialiserController::openSOFAFile()
 {
     // Load SOFA file asynchronously
     m_fileChooser = std::make_unique<juce::FileChooser>("Select a SOFA HRTF file to load...",
-		juce::File{}, "*.SOFA");
-	auto chooserFlags = juce::FileBrowserComponent::openMode
-		| juce::FileBrowserComponent::canSelectFiles;
+        juce::File{}, "*.SOFA");
+    auto chooserFlags = juce::FileBrowserComponent::openMode
+        | juce::FileBrowserComponent::canSelectFiles;
 
     m_fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fileChooser)
     {
@@ -243,13 +250,28 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
     // We don't need as many elements when we use this for realtime interpolation, so reallocate the memory.
     m_distMappingList.shrink_to_fit();
 
-    // Prep our convolution buffers
-    m_leftConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
-    m_rightConvolveOutput = std::make_unique<float[]>(m_numSamplesPerBlock + m_IRNumSamples - 1);
+    // Prep window and FFT controller
+    m_windowController = std::make_unique<juce::dsp::WindowingFunction<float>>(FFT_SIZE,
+        juce::dsp::WindowingFunction<float>::WindowingMethod::hann, false);
+    m_fftController = std::make_unique<juce::dsp::FFT>(FFT_BINS);
+    m_irFft = std::make_unique<float[]>(2 * FFT_SIZE);
+    m_inputFft = std::make_unique<float[]>(2 * FFT_SIZE);
 
-    // Prep out final output HRTF buffers
-    m_outputHRTF.m_IR[0] = std::make_unique<float[]>(m_IRNumSamples);
-    m_outputHRTF.m_IR[1] = std::make_unique<float[]>(m_IRNumSamples);
+    m_delayLineSize = m_numSamplesPerBlock + FFT_SIZE;
+    // Accomdate 1 full block plus one fft output and an overlap in convolver output buffer
+    m_convolveOutputBufferSize = m_numSamplesPerBlock + FFT_SIZE * 3;
+
+    for (int chan = 0; chan < 2; ++chan)
+    {
+        // Prep our delay line
+        m_delayLine[chan] = std::make_unique<float[]>(m_delayLineSize);
+
+        // Prep our convolution buffers
+        m_convolveOutput[chan] = std::make_unique<float[]>(m_convolveOutputBufferSize);
+
+        // Prep out final convolved output HRTF buffers
+        m_outputHRTF.m_IR[chan] = std::make_unique<float[]>(m_IRNumSamples);
+    }
 
     // Interpolate for our current azi and ele
     interpolateHRTF(m_outputHRTF, m_HRTFMappingCollection);
@@ -262,8 +284,7 @@ void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& buffe
     if (m_state == PREPARED)
     {
         // Convolve
-        convolve(bufferToFill.buffer->getWritePointer(0), bufferToFill.buffer->getWritePointer(1), 
-            m_outputHRTF.m_IR[0], m_outputHRTF.m_IR[1]);
+        convolve(*bufferToFill.buffer);
 
         // Apply ITD (TODO)
     }
@@ -271,9 +292,9 @@ void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& buffe
 
 void SpatialiserController::setPosition(double azi, double ele)
 {
-    m_outputHRTF.m_azi= azi;
+    m_outputHRTF.m_azi = azi;
     m_outputHRTF.m_ele = ele;
-    
+
     if (m_state == PREPARED)
     {
         interpolateHRTF(m_outputHRTF, m_HRTFMappingCollection);
@@ -289,7 +310,7 @@ void SpatialiserController::interpolateHRTF(HRTFMapping& targetHRTF, const std::
         distMapping.m_mappingIdx = i;
         distMapping.m_azi = hrtfMappingList[i].m_azi;
         distMapping.m_ele = hrtfMappingList[i].m_ele;
-        distMapping.m_distance = calcSphericaldist(targetHRTF.m_azi, targetHRTF.m_ele , hrtfMappingList[i].m_azi,
+        distMapping.m_distance = calcSphericaldist(targetHRTF.m_azi, targetHRTF.m_ele, hrtfMappingList[i].m_azi,
             hrtfMappingList[i].m_ele, m_radius);
     }
 
@@ -297,7 +318,7 @@ void SpatialiserController::interpolateHRTF(HRTFMapping& targetHRTF, const std::
     std::sort(m_distMappingList.begin(), m_distMappingList.end(), compareDist);
 
     // Calculate HRTF at our target position
-    if (juce::approximatelyEqual(m_distMappingList[0].m_distance, 0.0) || 
+    if (juce::approximatelyEqual(m_distMappingList[0].m_distance, 0.0) ||
         juce::approximatelyEqual(std::abs(targetHRTF.m_ele), 90.0))
     {
         // We have a HRTF at this position in our list, so just use this instead of interpolating
@@ -310,12 +331,12 @@ void SpatialiserController::interpolateHRTF(HRTFMapping& targetHRTF, const std::
             targetHRTF.m_ITD[receiverIdx] = hrtfMappingList[mappingIdx].m_ITD[receiverIdx];
         }
     }
-    else if (approximatelyEqual(targetHRTF.m_azi, m_distMappingList[0].m_azi, m_distMappingList[1].m_azi) 
-          || approximatelyEqual(targetHRTF.m_ele, m_distMappingList[0].m_ele, m_distMappingList[1].m_ele))
+    else if (approximatelyEqual(targetHRTF.m_azi, m_distMappingList[0].m_azi, m_distMappingList[1].m_azi)
+        || approximatelyEqual(targetHRTF.m_ele, m_distMappingList[0].m_ele, m_distMappingList[1].m_ele))
     {
         // The target point lies on the same plane as the closest two points. So just linearly interpolate between these 
         // two points
-    
+
         double factor = 0.0;
         if (approximatelyEqual(targetHRTF.m_azi, m_distMappingList[0].m_azi, m_distMappingList[1].m_azi))
         {
@@ -329,7 +350,7 @@ void SpatialiserController::interpolateHRTF(HRTFMapping& targetHRTF, const std::
             factor = std::abs(angDiff(targetHRTF.m_azi, m_distMappingList[0].m_azi) /
                 angDiff(m_distMappingList[0].m_azi, m_distMappingList[1].m_azi));
         }
-        
+
         for (int receiverIdx = 0; receiverIdx < 2; ++receiverIdx)
         {
             // Interpolate IRs
@@ -338,8 +359,8 @@ void SpatialiserController::interpolateHRTF(HRTFMapping& targetHRTF, const std::
                 targetHRTF.m_IR[receiverIdx][idx] = (1.0 - factor) * hrtfMappingList[m_distMappingList[0].m_mappingIdx].m_IR[receiverIdx][idx] +
                     factor * hrtfMappingList[m_distMappingList[1].m_mappingIdx].m_IR[receiverIdx][idx];
             }
-            targetHRTF.m_ITD[receiverIdx] = juce::roundToInt( (1.0 - factor) * hrtfMappingList[m_distMappingList[0].m_mappingIdx].m_ITD[receiverIdx] +
-                factor * hrtfMappingList[m_distMappingList[1].m_mappingIdx].m_ITD[receiverIdx] );
+            targetHRTF.m_ITD[receiverIdx] = juce::roundToInt((1.0 - factor) * hrtfMappingList[m_distMappingList[0].m_mappingIdx].m_ITD[receiverIdx] +
+                factor * hrtfMappingList[m_distMappingList[1].m_mappingIdx].m_ITD[receiverIdx]);
         }
     }
     else
@@ -412,31 +433,76 @@ void SpatialiserController::interpolateHRTF(HRTFMapping& targetHRTF, const std::
     m_distMappingList.clear();
 }
 
-void SpatialiserController::convolve(float* leftSignal, float* rightSignal, std::unique_ptr<float[]>& leftIR, 
-    std::unique_ptr<float[]>& rightIR)
+void SpatialiserController::convolve(juce::AudioSampleBuffer& buffer)
 {
-    // Erase first segment (size of input buffer) of our local convolver output buffer and shift data forward
-    std::memcpy(&m_leftConvolveOutput[0], &m_leftConvolveOutput[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
-    std::memset(&m_leftConvolveOutput[m_IRNumSamples - 1], 0, m_numSamplesPerBlock * sizeof(float));
-    std::memcpy(&m_rightConvolveOutput[0], &m_rightConvolveOutput[m_numSamplesPerBlock], (m_IRNumSamples - 1) * sizeof(float));
-    std::memset(&m_rightConvolveOutput[m_IRNumSamples - 1], 0, m_numSamplesPerBlock * sizeof(float));
-
-    // Convolve into local buffer
-    int outputNumSamples = m_numSamplesPerBlock + m_IRNumSamples - 1;
-    for (int outIdx = 0; outIdx < outputNumSamples; ++outIdx)
+    // Move samples in delay line and copy samples from buffer [ OLD BUFFER | NEW BUFFER ]
+    for (int chan = 0; chan < 2; ++chan)
     {
-        for (int IRIdx = 0; IRIdx < m_IRNumSamples; ++IRIdx)
+        std::memcpy(&m_delayLine[chan][0], &m_delayLine[chan][m_numSamplesPerBlock], (m_delayLineSize - m_numSamplesPerBlock) * sizeof(float));
+        std::memcpy(&m_delayLine[chan][m_delayLineSize-m_numSamplesPerBlock], buffer.getReadPointer(chan), m_numSamplesPerBlock * sizeof(float));
+    }
+    m_delayLineSamplesAvailable += buffer.getNumSamples();
+
+    // If there are enough samples in our delay line, perform fft
+    while (m_delayLineSamplesAvailable >= FFT_SIZE)
+    {
+        for (int chan = 0; chan < 2; ++chan)
         {
-            int inputIdx = outIdx - IRIdx;
-            if (inputIdx >= 0 && inputIdx < m_numSamplesPerBlock)
+            // Get windowed fft for IR
+            std::memset(&m_irFft[0], 0, FFT_SIZE * 2 * sizeof(float));
+            std::memcpy(&m_irFft[0], &m_outputHRTF.m_IR[chan][0], m_IRNumSamples * sizeof(float));
+            m_fftController.get()->performRealOnlyForwardTransform(&m_irFft[0]);
+            
+            // Get windowed fft for input buffer
+            std::memset(&m_inputFft[0], 0, FFT_SIZE * 2 * sizeof(float));
+            std::memcpy(&m_inputFft[0], &m_delayLine[chan][m_delayLineSize - m_delayLineSamplesAvailable], 
+                FFT_SIZE * sizeof(float));
+            m_windowController->multiplyWithWindowingTable(&m_inputFft[0], FFT_SIZE);
+            m_fftController.get()->performRealOnlyForwardTransform(&m_inputFft[0]);
+
+            // Convolve IR fft with input bufer fft (point wise multiplication)
+            for (int i = 0; i < FFT_SIZE * 2; i += 2)
             {
-                m_leftConvolveOutput[outIdx] += (leftSignal[inputIdx] * leftIR[IRIdx]);
-                m_rightConvolveOutput[outIdx] += (rightSignal[inputIdx] * rightIR[IRIdx]);
+                float real_part = m_inputFft[i] * m_irFft[i] - m_inputFft[i + 1] * m_irFft[i + 1];
+                float imag_part = m_inputFft[i] * m_irFft[i + 1] + m_inputFft[i + 1] * m_irFft[i];
+                m_inputFft[i] = real_part;
+                m_inputFft[i+1] = imag_part;
             }
+            
+            // Inverse fft into time domain
+            m_fftController.get()->performRealOnlyInverseTransform(&m_inputFft[0]);
+
+            // Add convolved signal to our local buffer
+            for (int i = 0; i < FFT_SIZE*2; ++i)
+            {
+                m_convolveOutput[chan][m_samplesConvolved + i] += m_inputFft[i];
+            }
+
+        }
+        m_delayLineSamplesAvailable -= FFT_SIZE * FFT_HOP;
+        m_samplesConvolved += FFT_SIZE * FFT_HOP;
+    }
+
+    // If we have enough samples convolved, copy the samples into the buffer
+    if (m_samplesConvolved >= m_numSamplesPerBlock)
+    {
+        for (int chan = 0; chan < 2; ++chan)
+        {
+            std::memcpy(buffer.getWritePointer(chan), &m_convolveOutput[chan][0], m_numSamplesPerBlock * sizeof(float));
+
+            // Moce convolve buffer forward
+            std::memcpy(&m_convolveOutput[chan][0], &m_convolveOutput[chan][m_numSamplesPerBlock], 
+                (m_convolveOutputBufferSize - m_numSamplesPerBlock) * sizeof(float));
+            std::memset(&m_convolveOutput[chan][m_convolveOutputBufferSize - m_numSamplesPerBlock], 0, 
+                m_numSamplesPerBlock * sizeof(float));
+        }
+        m_samplesConvolved -= m_numSamplesPerBlock;
+    }
+    else
+    {
+        for (int chan = 0; chan < 2; ++chan)
+        {
+            std::memset(buffer.getWritePointer(chan), 0, m_numSamplesPerBlock * sizeof(float));
         }
     }
-    
-    // Copy a buffers worth of data from local buffer into output buffer
-    std::memcpy(leftSignal, &m_leftConvolveOutput[0], m_numSamplesPerBlock * sizeof(float));
-    std::memcpy(rightSignal, &m_rightConvolveOutput[0], m_numSamplesPerBlock * sizeof(float));
 }
