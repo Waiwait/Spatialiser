@@ -55,6 +55,9 @@ void AudioFileController::openAudioFile()
                 // Set our local reader source to be this newly created reader source
                 m_readerSource.reset(newReaderSource.release());
 
+                // Set reader to loop
+                m_readerSource.get()->setLooping(true);
+
                 m_mainComponent->setPlayButtonEnabled(true);
             }
         }
