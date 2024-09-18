@@ -65,12 +65,13 @@ private:
 	// Final interpolated HRTF to use when spatialising
 	HRTFMapping m_outputHRTF;
 
-	// FFT Convolution
-
+	// Delay line to store smaples for FFT and for ITD delays
+	int m_currITD[2];
 	std::unique_ptr<float[]> m_delayLine[2];
-	int m_delayLineSamplesAvailable;
+	int m_delayLineIdx[2];
 	int m_delayLineSize;
 
+	// FFT Convolution
 	std::unique_ptr<juce::dsp::WindowingFunction<float>> m_windowController;
 	std::unique_ptr<juce::dsp::FFT> m_fftController;
 

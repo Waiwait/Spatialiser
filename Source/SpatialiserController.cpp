@@ -3,8 +3,9 @@
 const int RESAMPLED_HRTF_ANGLE_INTERVAL = 5;
 const float HRTF_REL_ONSET_THRESHOLD = 0.31f;
 const int FFT_SIZE = 2048;
-const int FFT_BINS = log2(FFT_SIZE);
 const float FFT_HOP = 0.5f;
+const int FFT_OVERLAP = FFT_SIZE * FFT_HOP;
+const int FFT_BINS = log2(FFT_SIZE);
 
 struct Triangle
 {
@@ -82,21 +83,38 @@ bool getBarycentricCoeffs(double tarAzi, double tarEle, Triangle& t, double& a, 
     return(a >= 0.0 && a <= 1.0 && b >= 0.0 && b <= 1.0 && c >= 0.0 && c <= 1.0);
 }
 
+void interpolate(float* outputBuffer, size_t outputBufferNumSamples, const float* const inputBuffer, size_t inputBufferNumSamples)
+{
+    float scale = static_cast<float>(inputBufferNumSamples) / static_cast<float>(outputBufferNumSamples); // 20 / 30 = 0.6666
+    for (int outputIdx = 0; outputIdx < outputBufferNumSamples; ++outputIdx)
+    {
+        float inputIdx = outputIdx * scale;
+        size_t index0 = static_cast<size_t>(inputIdx);
+        size_t index1 = juce::jmin(index0 + 1, inputBufferNumSamples - 1);
+        float factor = inputIdx - static_cast<float>(index0);
+
+        outputBuffer[outputIdx] = inputBuffer[index0] * (1 - factor) + inputBuffer[index1] * factor;
+    }
+}
+
 SpatialiserController::SpatialiserController()
     : m_state(UNPREPARED)
     , m_numSamplesPerBlock(0)
     , m_inputSampleRate(0)
     , m_radius(0.0)
     , m_IRNumSamples(0)
-    , m_delayLineSamplesAvailable(0)
     , m_delayLineSize(0)
     , m_samplesConvolved(0)
     , m_convolveOutputBufferSize(0)
 {
     m_outputHRTF.m_azi = 0.0;
     m_outputHRTF.m_ele = 0.0;
+    m_currITD[0] = 0;
+    m_currITD[1] = 0;
     m_outputHRTF.m_ITD[0] = 0.0;
     m_outputHRTF.m_ITD[1] = 0.0;
+    m_delayLineIdx[0] = 0;
+    m_delayLineIdx[1] = 0;
 }
 
 SpatialiserController::~SpatialiserController()
@@ -257,9 +275,10 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
     m_irFft = std::make_unique<float[]>(2 * FFT_SIZE);
     m_inputFft = std::make_unique<float[]>(2 * FFT_SIZE);
 
-    m_delayLineSize = m_numSamplesPerBlock + FFT_SIZE;
-    // Accomdate 1 full block plus one fft output and an overlap in convolver output buffer
-    m_convolveOutputBufferSize = m_numSamplesPerBlock + FFT_SIZE * 3;
+    // Delay line needs to accomodate a block, the maximum ITD (num IR samples) and the size of one FFT
+    m_delayLineSize = m_numSamplesPerBlock + m_IRNumSamples + FFT_SIZE;
+    // Convoler output buffer needs to accomodate a block, the maximum ITD (num IR samples) and the size of one FFT + an overlap
+    m_convolveOutputBufferSize = m_numSamplesPerBlock + m_IRNumSamples + FFT_SIZE * 3; // Should this be hop * 3?
 
     for (int chan = 0; chan < 2; ++chan)
     {
@@ -435,16 +454,30 @@ void SpatialiserController::interpolateHRTF(HRTFMapping& targetHRTF, const std::
 
 void SpatialiserController::convolve(juce::AudioSampleBuffer& buffer)
 {
-    // Move samples in delay line and copy samples from buffer [ OLD BUFFER | NEW BUFFER ]
+    // Move samples in delay line
     for (int chan = 0; chan < 2; ++chan)
     {
-        std::memcpy(&m_delayLine[chan][0], &m_delayLine[chan][m_numSamplesPerBlock], (m_delayLineSize - m_numSamplesPerBlock) * sizeof(float));
-        std::memcpy(&m_delayLine[chan][m_delayLineSize-m_numSamplesPerBlock], buffer.getReadPointer(chan), m_numSamplesPerBlock * sizeof(float));
+        int delayLineIdx = m_delayLineIdx[chan];
+        if (m_currITD[chan] != m_outputHRTF.m_ITD[chan])
+        {
+            // If ITD has changed, interpolate our buffer (stretch/shrink) to match new ITD
+            int itdDiff = m_outputHRTF.m_ITD[chan] - m_currITD[chan];
+            interpolate(&m_delayLine[chan][delayLineIdx], buffer.getNumSamples() + itdDiff, buffer.getWritePointer(chan),
+                buffer.getNumSamples());
+
+            m_currITD[chan] = m_outputHRTF.m_ITD[chan];
+            m_delayLineIdx[chan] += buffer.getNumSamples() + itdDiff;
+        }
+        else
+        {
+            // No ITD change, so just copy samples from buffer
+            std::memcpy(&m_delayLine[chan][delayLineIdx], buffer.getReadPointer(chan), m_numSamplesPerBlock * sizeof(float));
+            m_delayLineIdx[chan] += buffer.getNumSamples();
+        }
     }
-    m_delayLineSamplesAvailable += buffer.getNumSamples();
 
     // If there are enough samples in our delay line, perform fft
-    while (m_delayLineSamplesAvailable >= FFT_SIZE)
+    while (juce::jmin(m_delayLineIdx[0], m_delayLineIdx[1]) >= FFT_SIZE)
     {
         for (int chan = 0; chan < 2; ++chan)
         {
@@ -455,7 +488,7 @@ void SpatialiserController::convolve(juce::AudioSampleBuffer& buffer)
             
             // Get windowed fft for input buffer
             std::memset(&m_inputFft[0], 0, FFT_SIZE * 2 * sizeof(float));
-            std::memcpy(&m_inputFft[0], &m_delayLine[chan][m_delayLineSize - m_delayLineSamplesAvailable], 
+            std::memcpy(&m_inputFft[0], &m_delayLine[chan][0],
                 FFT_SIZE * sizeof(float));
             m_windowController->multiplyWithWindowingTable(&m_inputFft[0], FFT_SIZE);
             m_fftController.get()->performRealOnlyForwardTransform(&m_inputFft[0]);
@@ -478,9 +511,11 @@ void SpatialiserController::convolve(juce::AudioSampleBuffer& buffer)
                 m_convolveOutput[chan][m_samplesConvolved + i] += m_inputFft[i];
             }
 
+            // Move delay line forward
+            std::memcpy(&m_delayLine[chan][0], &m_delayLine[chan][FFT_OVERLAP], (m_delayLineSize - FFT_OVERLAP) * sizeof(float));
+            m_delayLineIdx[chan] -= FFT_OVERLAP;
         }
-        m_delayLineSamplesAvailable -= FFT_SIZE * FFT_HOP;
-        m_samplesConvolved += FFT_SIZE * FFT_HOP;
+        m_samplesConvolved += FFT_OVERLAP;
     }
 
     // If we have enough samples convolved, copy the samples into the buffer
