@@ -1,5 +1,7 @@
 #include "SpatialiserController.h"
 
+#include "MainComponent.h";
+
 const int RESAMPLED_HRTF_ANGLE_INTERVAL = 5;
 const float HRTF_REL_ONSET_THRESHOLD = 0.31f;
 const int FFT_SIZE = 2048;
@@ -97,8 +99,10 @@ void interpolate(float* outputBuffer, size_t outputBufferNumSamples, const float
     }
 }
 
-SpatialiserController::SpatialiserController()
-    : m_state(UNPREPARED)
+SpatialiserController::SpatialiserController(MainComponent* mainComponentArg)
+    : m_mainComponent(mainComponentArg)
+    , loadHRTFDataThread(*this)
+    , m_state(UNPREPARED)
     , m_numSamplesPerBlock(0)
     , m_inputSampleRate(0)
     , m_radius(0.0)
@@ -129,6 +133,8 @@ void SpatialiserController::prepareToPlay(int inputSamplesPerBlock, double sampl
 
 void SpatialiserController::openSOFAFile()
 {
+    m_state = UNPREPARED;
+
     // Load SOFA file asynchronously
     m_fileChooser = std::make_unique<juce::FileChooser>("Select a SOFA HRTF file to load...",
         juce::File{}, "*.SOFA");
@@ -142,19 +148,26 @@ void SpatialiserController::openSOFAFile()
         {
             std::unique_ptr<sofa::File> file = std::make_unique<sofa::File>(chosenFile.getFullPathName().toStdString());
 
-            // Store off azi/ele positions of sources and their IRS
+            // Store off azi/ele positions of sources and their IRS off-thread
             if (file->IsFIRDataType())
             {
-                std::unique_ptr<sofa::GeneralFIR> firFile = std::make_unique<sofa::GeneralFIR>(chosenFile.getFullPathName().toStdString());
-                // TODO: Do this off-thread and report when done
-                loadHRTFData(*firFile.get());
+                m_sofaFIRFile = std::make_unique<sofa::GeneralFIR>(chosenFile.getFullPathName().toStdString());
+                m_mainComponent->setConsoleText("Loading SOFA HRTF file (this may take a while!)");
+                m_mainComponent->setLoadSOFAButtonLoading(true);
+                loadHRTFDataThread.startThread();
+            }
+            else
+            {
+                m_mainComponent->setConsoleText("SOFA file does not use FIR data type!");
             }
         }
     });
 }
 
-void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
+void SpatialiserController::loadHRTFData()
 {
+    sofa::GeneralFIR& file = *m_sofaFIRFile.get();
+
     // number of measurements (M in documentation)
     const long numMeasurements = file.GetNumMeasurements();
     // number of receivers (typically 2, one for each ear. R in documentation)
@@ -218,7 +231,8 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
                 }
                 if (sampleIdx == m_IRNumSamples - 1)
                 {
-                    // ASSERT HERE
+                    const juce::MessageManagerLock mmLock;
+                    m_mainComponent->setConsoleText("Code error calculating ITD!");
                 }
             }
 
@@ -248,6 +262,7 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
         }
     }
 
+    m_HRTFMappingCollection.clear();
     // Interpolate HRTFs in 5 deg intervals and store this collection
     for (int tarAzi = 0; tarAzi < 360; tarAzi += RESAMPLED_HRTF_ANGLE_INTERVAL)
     {
@@ -296,6 +311,10 @@ void SpatialiserController::loadHRTFData(sofa::GeneralFIR& file)
     interpolateHRTF(m_outputHRTF, m_HRTFMappingCollection);
 
     m_state = PREPARED;
+
+    const juce::MessageManagerLock mmLock;
+    m_mainComponent->setConsoleText("SOFA HRTF file loaded!");
+    m_mainComponent->setLoadSOFAButtonLoading(false);
 }
 
 void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& bufferToFill)
@@ -304,8 +323,6 @@ void SpatialiserController::spatialise(const juce::AudioSourceChannelInfo& buffe
     {
         // Convolve
         convolve(*bufferToFill.buffer);
-
-        // Apply ITD (TODO)
     }
 }
 
@@ -426,9 +443,8 @@ void SpatialiserController::interpolateHRTF(HRTFMapping& targetHRTF, const std::
                 }
                 if (distMapping1Idx >= hrtfMappingList.size() - 2)
                 {
-                    // We failed to find points that enclose the target. This should never happen and is likely
-                    // a code error
-                    int g = 0;
+                    const juce::MessageManagerLock mmLock;
+                    m_mainComponent->setConsoleText("Code error interpolating HRTF!");
                 }
             }
             else

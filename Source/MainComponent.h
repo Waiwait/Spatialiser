@@ -31,6 +31,9 @@ public:
     void setPlayButtonEnabled(bool enable) { m_playButton.setEnabled(enable); }
     void setStopButtonEnabled(bool enable) { m_stopButton.setEnabled(enable); }
 
+    void setLoadSOFAButtonLoading(bool enable);
+    void setConsoleText(const juce::String& text) { m_ConsoleText.setText(text, juce::dontSendNotification); }
+
 private:
     //==============================================================================
     void openButtonPressed() { m_audioFileController.openAudioFile(); }
@@ -51,6 +54,8 @@ private:
     juce::Slider m_aziDial;
     juce::Label m_eleLabel;
     juce::Slider m_eleSlider;
+
+    juce::Label m_ConsoleText;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

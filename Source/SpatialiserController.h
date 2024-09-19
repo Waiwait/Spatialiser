@@ -3,6 +3,8 @@
 #include <JuceHeader.h>
 #include "SOFA.h"
 
+class MainComponent;
+
 class SpatialiserController
 {
 public:
@@ -14,13 +16,13 @@ public:
 		double m_ele;
 	};
 
-	SpatialiserController();
+	explicit SpatialiserController(MainComponent* mainComponentArg);
 	~SpatialiserController();
 
 	void prepareToPlay(int samplesPerBlockExpected, double sampleRate);
 
 	void openSOFAFile();
-	void loadHRTFData(sofa::GeneralFIR& file);
+	void loadHRTFData();
 
 	void setPosition(double azi, double ele);
 	void spatialise(const juce::AudioSourceChannelInfo& bufferToFill);
@@ -41,9 +43,29 @@ private:
 		std::unique_ptr<float[]> m_IR[2];
 	};
 
+	// Juce thread class for loading HRTF data off thread
+	class LoadHRTFDataThread : private juce::Thread
+	{
+		friend SpatialiserController;
+	public:
+		LoadHRTFDataThread(SpatialiserController& spatialiserController)
+			: Thread("Load HRTF data thread") 
+			, m_spatialiserController(spatialiserController)
+		{}
+		void run() override {
+			m_spatialiserController.loadHRTFData();
+		};
+
+	private:
+		SpatialiserController& m_spatialiserController;
+	};
+
 	void interpolateHRTF(HRTFMapping& targetHRTF, const std::vector< HRTFMapping >& hrtfMappingList);
 	void convolve(juce::AudioSampleBuffer& buffer);
 
+	MainComponent* m_mainComponent;
+
+	LoadHRTFDataThread loadHRTFDataThread;
 	State m_state;
 
 	// Expected audio buffer values
@@ -52,6 +74,7 @@ private:
 
 	// Sofa file
 	std::unique_ptr<juce::FileChooser> m_fileChooser;
+	std::unique_ptr<sofa::GeneralFIR> m_sofaFIRFile;
 
 	// HRTFs
 	double m_radius; // Distance at which HRTF was measured

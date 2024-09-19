@@ -3,12 +3,13 @@
 //==============================================================================
 MainComponent::MainComponent()
     : m_audioFileController( this )
+    , m_spatialiserController( this )
     , m_aziDial(juce::Slider::Rotary, juce::Slider::TextBoxBelow)
     , m_eleSlider(juce::Slider::LinearVertical, juce::Slider::TextBoxBelow)
 {
     // Make sure you set the size of the component after
     // you add any child components.
-    setSize (400, 600);
+    setSize (400, 400);
 
     // Some platforms require permissions to open input channels so request that here
     if (juce::RuntimePermissions::isRequired (juce::RuntimePermissions::recordAudio)
@@ -25,7 +26,7 @@ MainComponent::MainComponent()
 
     // Add transport buttons
     addAndMakeVisible(&m_openSofaFileButton);
-    m_openSofaFileButton.setButtonText("Open Sofa File");
+    m_openSofaFileButton.setButtonText("Open SOFA HRTF File");
     m_openSofaFileButton.onClick = [this] { m_spatialiserController.openSOFAFile(); };
 
     addAndMakeVisible(&m_openAudioFileButton);
@@ -68,6 +69,9 @@ MainComponent::MainComponent()
     m_eleLabel.setJustificationType(juce::Justification::centredBottom);
     m_eleLabel.attachToComponent(&m_eleSlider, false);
     m_eleLabel.setText("Elevation Angle", juce::dontSendNotification);
+
+    addAndMakeVisible(&m_ConsoleText);
+    m_ConsoleText.setJustificationType(juce::Justification::topLeft);
 }
 
 MainComponent::~MainComponent()
@@ -133,6 +137,21 @@ void MainComponent::resized()
 
     m_aziDial.setBounds(10, 155, getWidth()/2, getWidth()/2);
     m_eleSlider.setBounds(getWidth() / 2, 155, getWidth() / 2, getWidth() / 2);
+
+    m_ConsoleText.setBounds(20, 170 + getWidth()/2, getWidth(), getWidth());
+}
+
+void MainComponent::setLoadSOFAButtonLoading(bool enable)
+{
+    m_openSofaFileButton.setEnabled(!enable);
+    if (enable)
+    {
+        m_openSofaFileButton.setButtonText("Loading SOFA HRTF File");
+    }
+    else
+    {
+        m_openSofaFileButton.setButtonText("Open SOFA HRTF File");
+    }
 }
 
 void MainComponent::onSliderChange()
