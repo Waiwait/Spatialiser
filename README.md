@@ -1,6 +1,6 @@
 # Overview
 
-This is little hobby project where a binaural HRTF spatialisation algorithm is implemented in JUCE. The spatialisation algorithm is taken from the [3D Tune-In Toolkit](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0211899).
+This is a little hobby project where a binaural HRTF spatialisation algorithm is implemented in JUCE. The spatialisation algorithm is taken from the [3D Tune-In Toolkit](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0211899).
 
 [Demo video](https://www.youtube.com/watch?v=2QFWUNvzTVM)
 
